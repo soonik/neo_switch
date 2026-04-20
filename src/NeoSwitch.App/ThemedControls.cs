@@ -210,5 +210,11 @@ public static class ButtonStyler
             b.FlatAppearance.MouseDownBackColor = Color.FromArgb(0x3C, 0x3C, 0x3C);
         }
         b.AutoSize = true;
+        b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        // Pin a consistent height so buttons whose labels contain wider glyphs
+        // (e.g. the full-width '＋' in the Add buttons) don't render taller
+        // than plain-ASCII siblings like "Remove".
+        b.MinimumSize = new Size(0, 30);
+        b.Padding = new Padding(12, 4, 12, 4);
     }
 }

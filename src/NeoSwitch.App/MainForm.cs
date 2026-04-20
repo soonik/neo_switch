@@ -173,13 +173,21 @@ public sealed class MainForm : Form
         namePanel.Controls.Add(_cbDevice, 0, 0);
         namePanel.Controls.Add(_kbInfo,   0, 1);
 
-        p.Controls.Add(_statusDot, 0, 0);
-        p.Controls.Add(namePanel,  1, 0);
-        p.Controls.Add(_profileChip, 2, 0);
-        _profileChip.Anchor = AnchorStyles.Right;
-        _profileChip.Margin = new Padding(0, 8, 12, 0);
+        // AnchorStyles with neither Top nor Bottom lets TableLayoutPanel centre
+        // the control vertically in its (fixed-height) cell. That keeps the
+        // status dot, device combo, profile chip, and Reconnect button on the
+        // same horizontal sight-line.
+        _statusDot.Anchor    = AnchorStyles.None;
+        namePanel.Anchor     = AnchorStyles.Left;
+        _profileChip.Anchor  = AnchorStyles.Right;
+        _btnReconnect.Anchor = AnchorStyles.Right;
+        _profileChip.Margin  = new Padding(0, 0, 12, 0);
+        _btnReconnect.Margin = new Padding(0);
+
+        p.Controls.Add(_statusDot,    0, 0);
+        p.Controls.Add(namePanel,     1, 0);
+        p.Controls.Add(_profileChip,  2, 0);
         p.Controls.Add(_btnReconnect, 3, 0);
-        _btnReconnect.Margin = new Padding(0, 4, 0, 0);
 
         // Subtle bottom border between header and body.
         p.Paint += (_, e) =>
@@ -247,18 +255,28 @@ public sealed class MainForm : Form
         _listApps.Dock = DockStyle.Fill;
         left.Controls.Add(_listApps, 0, 1);
 
-        var btnRow = new FlowLayoutPanel
+        // TableLayoutPanel (not FlowLayout) so all three buttons share the
+        // same baseline even when their text widths differ — Anchor=None then
+        // centres each button vertically within the row height.
+        var btnRow = new TableLayoutPanel
         {
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true,
+            ColumnCount = 4, RowCount = 1, AutoSize = true,
             Margin = new Padding(0, 8, 0, 0),
             BackColor = Color.Transparent,
         };
-        btnRow.Controls.Add(_btnAddFile);
-        btnRow.Controls.Add(_btnAddRunning);
-        btnRow.Controls.Add(_btnRemove);
-        _btnAddFile.Margin = new Padding(0, 0, 8, 0);
+        btnRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        btnRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        btnRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        btnRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        _btnAddFile.Anchor    = AnchorStyles.None;
+        _btnAddRunning.Anchor = AnchorStyles.None;
+        _btnRemove.Anchor     = AnchorStyles.None;
+        _btnAddFile.Margin    = new Padding(0, 0, 8, 0);
         _btnAddRunning.Margin = new Padding(0, 0, 8, 0);
+        _btnRemove.Margin     = new Padding(0);
+        btnRow.Controls.Add(_btnAddFile,    0, 0);
+        btnRow.Controls.Add(_btnAddRunning, 1, 0);
+        btnRow.Controls.Add(_btnRemove,     2, 0);
         left.Controls.Add(btnRow, 0, 2);
         split.Panel1.Controls.Add(left);
 
