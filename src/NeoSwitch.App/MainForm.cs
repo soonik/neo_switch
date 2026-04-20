@@ -7,6 +7,7 @@ public sealed class MainForm : Form
 {
     private readonly RuntimeController _runtime;
     private readonly SettingsStore _store;
+    private readonly SynchronizationContext _ui;
     private Settings S => _store.Current;
 
     // Header
@@ -38,10 +39,11 @@ public sealed class MainForm : Form
         Text = "(no events yet)",
     };
 
-    public MainForm(RuntimeController runtime, SettingsStore store)
+    public MainForm(RuntimeController runtime, SettingsStore store, SynchronizationContext ui)
     {
         _runtime = runtime;
         _store   = store;
+        _ui      = ui;
 
         Text = "NeoSwitch";
         Width = 820;
@@ -245,12 +247,12 @@ public sealed class MainForm : Form
         _runtime.StateChanged += () =>
         {
             if (IsDisposed) return;
-            try { BeginInvoke(new Action(RefreshUiFromRuntime)); } catch { }
+            _ui.Post(_ => { if (!IsDisposed) RefreshUiFromRuntime(); }, null);
         };
         _runtime.LogLine += line =>
         {
             if (IsDisposed) return;
-            try { BeginInvoke(new Action<string>(AppendLog), line); } catch { }
+            _ui.Post(_ => { if (!IsDisposed) AppendLog(line); }, null);
         };
     }
 

@@ -23,6 +23,9 @@ public sealed class RuntimeController : IDisposable
 {
     private readonly Settings _settings;
     private readonly object _lock = new();
+    // Serialises control operations (Start/Stop/Reconnect) so they never
+    // overlap on the thread pool.
+    private readonly SemaphoreSlim _controlSem = new(1, 1);
     private bool _disposed;
 
     private KeyboardClient? _kb;
@@ -52,17 +55,38 @@ public sealed class RuntimeController : IDisposable
         _settings = settings;
     }
 
-    /// <summary>Open the keyboard and install the foreground hook.</summary>
-    public void Start()
+    /// <summary>
+    /// Open the keyboard and install the foreground hook. Non-blocking — the
+    /// actual HID round-trips run on the thread pool. Observe progress via
+    /// <see cref="StateChanged"/>.
+    /// </summary>
+    public void Start() => RunControl(StartCore);
+
+    public void Stop() => RunControl(StopCore);
+
+    public void Reconnect() => RunControl(() => { StopCore(); StartCore(); });
+
+    private void RunControl(Action op)
+    {
+        Task.Run(() =>
+        {
+            _controlSem.Wait();
+            try { op(); }
+            catch (Exception ex) { Log($"control op failed: {ex}"); }
+            finally { _controlSem.Release(); }
+        });
+    }
+
+    private void StartCore()
     {
         lock (_lock)
         {
             if (_disposed) return;
             if (_kb != null) return;
-            TransitionTo(RuntimeState.Connecting, "opening keyboard…");
         }
+        TransitionTo(RuntimeState.Connecting, "opening keyboard…");
 
-        // Open device outside the lock — can be slow / throw.
+        KeyboardClient? kb = null;
         try
         {
             var dev = PickDevice();
@@ -71,13 +95,14 @@ public sealed class RuntimeController : IDisposable
                 TransitionTo(RuntimeState.Disconnected, "no matching keyboard");
                 return;
             }
-            var kb = KeyboardClient.Open(dev);
+            kb = KeyboardClient.Open(dev);
             byte count = kb.GetProfileCount();
             var profiles = kb.LoadAllProfiles();
             byte current = kb.GetCurrentProfileIdx();
 
             lock (_lock)
             {
+                if (_disposed) { kb.Dispose(); return; }
                 _kb = kb;
                 ProfileCount = count;
                 Profiles = profiles;
@@ -94,22 +119,21 @@ public sealed class RuntimeController : IDisposable
         }
         catch (Exception ex)
         {
+            try { kb?.Dispose(); } catch { }
             TransitionTo(RuntimeState.Error, ex.Message);
             Log($"open failed: {ex.Message}");
         }
     }
 
-    public void Stop()
+    private void StopCore()
     {
+        ForegroundWatcher? watcher;
+        DebouncedSwitcher? switcher;
+        KeyboardClient? kb;
         lock (_lock)
         {
-            _watcher?.Dispose();
-            _switcher?.Dispose();
-            _kb?.Dispose();
-            _watcher = null;
-            _switcher = null;
-            _engine = null;
-            _kb = null;
+            watcher = _watcher; switcher = _switcher; kb = _kb;
+            _watcher = null; _switcher = null; _engine = null; _kb = null;
             CurrentProfileIdx = null;
             ProfileCount = null;
             Profiles = null;
@@ -117,13 +141,11 @@ public sealed class RuntimeController : IDisposable
             ConnectedVid = null;
             ConnectedPid = null;
         }
+        // Dispose outside the lock — watcher.Stop joins its pump thread (can take up to 2s).
+        try { watcher?.Dispose(); } catch { }
+        try { switcher?.Dispose(); } catch { }
+        try { kb?.Dispose(); } catch { }
         TransitionTo(RuntimeState.Disconnected, "stopped");
-    }
-
-    public void Reconnect()
-    {
-        Stop();
-        Start();
     }
 
     public void TogglePause()
@@ -167,7 +189,10 @@ public sealed class RuntimeController : IDisposable
     public void Dispose()
     {
         lock (_lock) { _disposed = true; }
-        Stop();
+        // Wait for any in-flight Start/Stop to settle, then tear down synchronously.
+        try { _controlSem.Wait(TimeSpan.FromSeconds(3)); } catch { }
+        try { StopCore(); } finally { try { _controlSem.Release(); } catch { } }
+        _controlSem.Dispose();
     }
 
     // ----- helpers -----
