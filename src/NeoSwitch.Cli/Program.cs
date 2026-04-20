@@ -39,6 +39,7 @@ internal static class Program
             "switch" => CmdSwitch(opts, rest),
             "probe"  => CmdProbe(opts),
             "raw"    => CmdRaw(opts, rest),
+            "watch"  => CmdWatch(opts, rest),
             _        => Fail($"unknown command '{cmd}' — run with --help for usage.")
         };
     }
@@ -61,8 +62,9 @@ internal static class Program
             Console.WriteLine("run with '--all' to see every HID device on the system.");
             return 0;
         }
-        Console.WriteLine($"{devs.Count} matching device(s):");
-        foreach (var d in devs) PrintDevice(d, indent: "  ");
+        Console.WriteLine($"{devs.Count} matching device(s)   (use --device <n> to pick)");
+        for (int i = 0; i < devs.Count; i++)
+            PrintDevice(devs[i], indent: "  ", index: i);
         return 0;
     }
 
@@ -81,13 +83,14 @@ internal static class Program
         Console.WriteLine($"{shown} HID device(s) total{(opts.VendorId.HasValue || opts.ProductId.HasValue ? " (after vid/pid filter)" : "")}.");
     }
 
-    static void PrintDevice(HidDevice d, string indent)
+    static void PrintDevice(HidDevice d, string indent, int? index = null)
     {
         string name = Try(() => d.GetProductName()) ?? "(no name)";
         string mfg  = Try(() => d.GetManufacturer()) ?? "(no mfg)";
         var usages  = KeyboardClient.GetUsages(d);
         bool raw    = usages.Contains(Protocol.RawHidUsage);
-        Console.WriteLine($"{indent}vid=0x{d.VendorID:X4} pid=0x{d.ProductID:X4}  {mfg} / {name}   " +
+        string prefix = index is int i ? $"[{i}] " : "";
+        Console.WriteLine($"{indent}{prefix}vid=0x{d.VendorID:X4} pid=0x{d.ProductID:X4}  {mfg} / {name}   " +
                           $"{(raw ? "[raw-HID *]" : "")}");
         Console.WriteLine($"{indent}  path: {d.DevicePath}");
         int outLen = SafeLen(() => d.GetMaxOutputReportLength());
@@ -194,6 +197,104 @@ internal static class Program
         return 0;
     }
 
+    static int CmdWatch(Options opts, string[] rest)
+    {
+        if (!OperatingSystem.IsWindows())
+            return Fail("'watch' is Windows-only.");
+
+        WatchArgs cfg;
+        try { cfg = ParseWatchArgs(rest); }
+        catch (FormatException ex) { return Fail(ex.Message); }
+
+        if (cfg.Apps.Count == 0)
+            return Fail("watch: specify at least one --app <exe.exe> (e.g. --app valorant.exe).");
+
+        using var kb = MustOpen(opts);
+        byte count = kb.GetProfileCount();
+        if (cfg.FgProfile >= count || cfg.BgProfile >= count)
+            return Fail($"profile index out of range; device reports {count} profiles.");
+
+        byte current = kb.GetCurrentProfileIdx();
+        Console.Error.WriteLine(
+            $"connected: {kb.Manufacturer} / {kb.ProductName}  (profiles={count}, current={current})");
+
+        var engine = new RuleEngine
+        {
+            ForegroundProfile = cfg.FgProfile,
+            BackgroundProfile = cfg.BgProfile,
+        };
+        foreach (var app in cfg.Apps) engine.WatchedExes.Add(app);
+
+        using var watcher = new ForegroundWatcher();
+
+        engine.Decided += dec =>
+        {
+            string tag = dec.ProfileChanged ? "SWITCH" : "      ";
+            bool watched = engine.WatchedExes.Contains(dec.App.Executable);
+            string marker = watched ? "*" : " ";
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] {tag} {marker} fg={dec.App.Executable,-32} -> profile {dec.TargetProfile}");
+
+            if (!dec.ProfileChanged || cfg.DryRun) return;
+            try { kb.SwitchProfile(dec.TargetProfile); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"    switch failed: {ex.Message}");
+            }
+        };
+        watcher.Changed += engine.OnForegroundChanged;
+
+        watcher.Start();
+
+        Console.WriteLine($"watching {cfg.Apps.Count} app(s): {string.Join(", ", cfg.Apps)}");
+        Console.WriteLine($"fg profile = {cfg.FgProfile}   bg profile = {cfg.BgProfile}{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
+        Console.WriteLine("(Ctrl+C to stop)");
+        Console.WriteLine();
+
+        var done = new ManualResetEventSlim();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.Set(); };
+        done.Wait();
+
+        Console.WriteLine("stopping...");
+        watcher.Stop();
+        return 0;
+    }
+
+    sealed record WatchArgs(List<string> Apps, byte FgProfile, byte BgProfile, bool DryRun);
+
+    static WatchArgs ParseWatchArgs(string[] args)
+    {
+        var apps = new List<string>();
+        byte fg = 1, bg = 0;
+        bool dry = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            switch (a)
+            {
+                case "--app" when i + 1 < args.Length:
+                    apps.Add(args[++i].ToLowerInvariant());
+                    break;
+                case "--fg":
+                case "--fg-profile":
+                    if (i + 1 >= args.Length || !TryParseByte(args[++i], out fg))
+                        throw new FormatException($"bad {a} value");
+                    break;
+                case "--bg":
+                case "--bg-profile":
+                    if (i + 1 >= args.Length || !TryParseByte(args[++i], out bg))
+                        throw new FormatException($"bad {a} value");
+                    break;
+                case "--dry-run":
+                    dry = true;
+                    break;
+                default:
+                    throw new FormatException($"watch: unknown option '{a}'");
+            }
+        }
+        return new WatchArgs(apps, fg, bg, dry);
+    }
+
     static int CmdRaw(Options opts, string[] rest)
     {
         if (rest.Length == 0)
@@ -226,13 +327,35 @@ internal static class Program
             throw new InvalidOperationException(
                 "no matching keyboard found. Try 'neoswitch list' — or 'neoswitch list --all' to see every HID device.");
 
-        if (devs.Count > 1 && !(opts.VendorId.HasValue && opts.ProductId.HasValue))
+        HidDevice chosen;
+        if (opts.DeviceIndex is int di)
         {
-            Console.Error.WriteLine($"warning: {devs.Count} raw-HID devices match; using the first one.");
-            Console.Error.WriteLine("         disambiguate with --vid 0xNNNN --pid 0xNNNN.");
+            if (di < 0 || di >= devs.Count)
+                throw new InvalidOperationException(
+                    $"--device {di} is out of range ({devs.Count} device(s) match).");
+            chosen = devs[di];
+        }
+        else if (devs.Count == 1)
+        {
+            chosen = devs[0];
+        }
+        else
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"{devs.Count} raw-HID devices match — pick one explicitly:");
+            for (int i = 0; i < devs.Count; i++)
+            {
+                var d = devs[i];
+                string name = Try(() => d.GetProductName()) ?? "(no name)";
+                string mfg  = Try(() => d.GetManufacturer()) ?? "(no mfg)";
+                sb.AppendLine($"  [{i}] vid=0x{d.VendorID:X4} pid=0x{d.ProductID:X4}  {mfg} / {name}");
+            }
+            sb.AppendLine();
+            sb.Append("  use  --device <index>  (e.g. --device 0)  or  --vid 0xNNNN --pid 0xNNNN");
+            throw new InvalidOperationException(sb.ToString());
         }
 
-        var kb = KeyboardClient.Open(devs[0]);
+        var kb = KeyboardClient.Open(chosen);
         kb.ReadTimeoutMs = opts.TimeoutMs;
         if (opts.Verbose || forceVerbose)
             kb.Logger = line => Console.Error.WriteLine($"    [hid] {line}");
@@ -265,11 +388,11 @@ internal static class Program
 
     // ---------------- options ----------------
 
-    sealed record Options(int? VendorId, int? ProductId, bool Verbose, int TimeoutMs);
+    sealed record Options(int? VendorId, int? ProductId, int? DeviceIndex, bool Verbose, int TimeoutMs);
 
     static Options ParseOptions(ref string[] args)
     {
-        int? vid = null, pid = null;
+        int? vid = null, pid = null, deviceIdx = null;
         bool verbose = false;
         int timeout = 1500;
         var remaining = new List<string>(args.Length);
@@ -283,6 +406,10 @@ internal static class Program
                 case "--pid" when i + 1 < args.Length:
                     if (!TryParseHex(args[++i], out int p)) throw new FormatException($"invalid --pid value '{args[i]}'");
                     pid = p; break;
+                case "--device" when i + 1 < args.Length:
+                case "-d" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out int di)) throw new FormatException($"invalid --device value '{args[i]}'");
+                    deviceIdx = di; break;
                 case "--timeout" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out int t)) throw new FormatException($"invalid --timeout value '{args[i]}'");
                     timeout = t; break;
@@ -294,7 +421,7 @@ internal static class Program
             }
         }
         args = remaining.ToArray();
-        return new Options(vid, pid, verbose, timeout);
+        return new Options(vid, pid, deviceIdx, verbose, timeout);
     }
 
     static bool TryParseHex(string s, out int value)
@@ -320,10 +447,12 @@ internal static class Program
               switch <idx>            change to profile <idx>
               probe                   run transport + protocol checks (VIA 0x01, then D0 B0)
               raw <hex bytes>         send arbitrary command, print reply  (e.g. 'raw D0 B0')
+              watch --app <exe>...    foreground-driven profile switch (--fg/--bg/--dry-run)
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)
               --pid <hex>             restrict to this USB product ID
+              -d, --device <idx>      pick by index when multiple match (see 'list')
               --timeout <ms>          HID read timeout (default 1500)
               -v, --verbose           print every HID TX/RX in hex
 
@@ -332,8 +461,11 @@ internal static class Program
               neoswitch list --all
               neoswitch probe
               neoswitch -v info
+              neoswitch --device 0 info               # disambiguate if 'list' shows 2+
               neoswitch --vid 0x1ea7 raw D0 B6        # profile count
               neoswitch switch 1
+              neoswitch watch --app valorant.exe --app cs2.exe --fg 1 --bg 0
+              neoswitch watch --app notepad.exe --dry-run
             """);
     }
 }
