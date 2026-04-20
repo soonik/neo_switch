@@ -226,7 +226,13 @@ internal static class Program
         foreach (var app in cfg.Apps) engine.WatchedExes.Add(app);
 
         using var watcher = new ForegroundWatcher();
-        using var switcher = new DebouncedSwitcher(kb, cfg.SwitchDelayMs);
+        using var switcher = new DebouncedSwitcher(kb, cfg.SwitchDelayMs)
+        {
+            Gate = OperatingSystem.IsWindows() && !cfg.NoModifierGate
+                ? () => !ModifierKeys.AnyHeld()
+                : null,
+            GateTimeoutMs = cfg.GateTimeoutMs,
+        };
 
         if (cfg.LogFiltered)
         {
@@ -235,6 +241,12 @@ internal static class Program
                     $"[{DateTime.Now:HH:mm:ss.fff}]   SKIP      class='{s.WindowClass}' exe={s.Executable}  ({s.Reason})");
         }
 
+        switcher.Waiting += ms =>
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss.fff}]   WAIT  modifiers held ({ModifierKeys.HeldString()})");
+        };
         switcher.Sent += target =>
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   SENT profile {target}");
         switcher.Failed += (target, ex) =>
@@ -258,7 +270,9 @@ internal static class Program
         Console.WriteLine($"watching {cfg.Apps.Count} app(s): {string.Join(", ", cfg.Apps)}");
         Console.WriteLine(
             $"fg profile = {cfg.FgProfile}   bg profile = {cfg.BgProfile}   " +
-            $"switch delay = {cfg.SwitchDelayMs}ms{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
+            $"switch delay = {cfg.SwitchDelayMs}ms   " +
+            $"modifier gate = {(cfg.NoModifierGate ? "off" : $"on ({cfg.GateTimeoutMs}ms timeout)")}" +
+            $"{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
         Console.WriteLine("(Ctrl+C to stop)");
         Console.WriteLine();
 
@@ -273,7 +287,8 @@ internal static class Program
 
     sealed record WatchArgs(
         List<string> Apps, byte FgProfile, byte BgProfile,
-        bool DryRun, int SwitchDelayMs, bool LogFiltered);
+        bool DryRun, int SwitchDelayMs, bool LogFiltered,
+        bool NoModifierGate, int GateTimeoutMs);
 
     static WatchArgs ParseWatchArgs(string[] args)
     {
@@ -282,6 +297,8 @@ internal static class Program
         bool dry = false;
         int delayMs = 200;
         bool logFiltered = false;
+        bool noGate = false;
+        int gateTimeout = 1000;
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
@@ -304,6 +321,13 @@ internal static class Program
                     if (i + 1 >= args.Length || !int.TryParse(args[++i], out delayMs) || delayMs < 0)
                         throw new FormatException($"bad {a} value (expected non-negative integer ms)");
                     break;
+                case "--gate-timeout":
+                    if (i + 1 >= args.Length || !int.TryParse(args[++i], out gateTimeout) || gateTimeout < 0)
+                        throw new FormatException($"bad {a} value (expected non-negative integer ms)");
+                    break;
+                case "--no-modifier-gate":
+                    noGate = true;
+                    break;
                 case "--dry-run":
                     dry = true;
                     break;
@@ -314,7 +338,7 @@ internal static class Program
                     throw new FormatException($"watch: unknown option '{a}'");
             }
         }
-        return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered);
+        return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered, noGate, gateTimeout);
     }
 
     static int CmdRaw(Options opts, string[] rest)
@@ -470,7 +494,8 @@ internal static class Program
               probe                   run transport + protocol checks (VIA 0x01, then D0 B0)
               raw <hex bytes>         send arbitrary command, print reply  (e.g. 'raw D0 B0')
               watch --app <exe>...    foreground-driven profile switch
-                                      (--fg/--bg/--switch-delay/--dry-run/--log-filtered)
+                                      (--fg/--bg/--switch-delay/--gate-timeout/
+                                       --no-modifier-gate/--dry-run/--log-filtered)
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)
