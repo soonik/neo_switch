@@ -226,6 +226,12 @@ internal static class Program
         foreach (var app in cfg.Apps) engine.WatchedExes.Add(app);
 
         using var watcher = new ForegroundWatcher();
+        using var switcher = new DebouncedSwitcher(kb, cfg.SwitchDelayMs);
+
+        switcher.Sent += target =>
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   SENT profile {target}");
+        switcher.Failed += (target, ex) =>
+            Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   SEND FAILED -> {target}: {ex.Message}");
 
         engine.Decided += dec =>
         {
@@ -233,21 +239,19 @@ internal static class Program
             bool watched = engine.WatchedExes.Contains(dec.App.Executable);
             string marker = watched ? "*" : " ";
             Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] {tag} {marker} fg={dec.App.Executable,-32} -> profile {dec.TargetProfile}");
+                $"[{DateTime.Now:HH:mm:ss.fff}] {tag} {marker} fg={dec.App.Executable,-32} -> profile {dec.TargetProfile}");
 
             if (!dec.ProfileChanged || cfg.DryRun) return;
-            try { kb.SwitchProfile(dec.TargetProfile); }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"    switch failed: {ex.Message}");
-            }
+            switcher.Schedule(dec.TargetProfile);
         };
         watcher.Changed += engine.OnForegroundChanged;
 
         watcher.Start();
 
         Console.WriteLine($"watching {cfg.Apps.Count} app(s): {string.Join(", ", cfg.Apps)}");
-        Console.WriteLine($"fg profile = {cfg.FgProfile}   bg profile = {cfg.BgProfile}{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
+        Console.WriteLine(
+            $"fg profile = {cfg.FgProfile}   bg profile = {cfg.BgProfile}   " +
+            $"switch delay = {cfg.SwitchDelayMs}ms{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
         Console.WriteLine("(Ctrl+C to stop)");
         Console.WriteLine();
 
@@ -260,13 +264,14 @@ internal static class Program
         return 0;
     }
 
-    sealed record WatchArgs(List<string> Apps, byte FgProfile, byte BgProfile, bool DryRun);
+    sealed record WatchArgs(List<string> Apps, byte FgProfile, byte BgProfile, bool DryRun, int SwitchDelayMs);
 
     static WatchArgs ParseWatchArgs(string[] args)
     {
         var apps = new List<string>();
         byte fg = 1, bg = 0;
         bool dry = false;
+        int delayMs = 200;
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
@@ -285,6 +290,10 @@ internal static class Program
                     if (i + 1 >= args.Length || !TryParseByte(args[++i], out bg))
                         throw new FormatException($"bad {a} value");
                     break;
+                case "--switch-delay":
+                    if (i + 1 >= args.Length || !int.TryParse(args[++i], out delayMs) || delayMs < 0)
+                        throw new FormatException($"bad {a} value (expected non-negative integer ms)");
+                    break;
                 case "--dry-run":
                     dry = true;
                     break;
@@ -292,7 +301,7 @@ internal static class Program
                     throw new FormatException($"watch: unknown option '{a}'");
             }
         }
-        return new WatchArgs(apps, fg, bg, dry);
+        return new WatchArgs(apps, fg, bg, dry, delayMs);
     }
 
     static int CmdRaw(Options opts, string[] rest)
@@ -447,7 +456,8 @@ internal static class Program
               switch <idx>            change to profile <idx>
               probe                   run transport + protocol checks (VIA 0x01, then D0 B0)
               raw <hex bytes>         send arbitrary command, print reply  (e.g. 'raw D0 B0')
-              watch --app <exe>...    foreground-driven profile switch (--fg/--bg/--dry-run)
+              watch --app <exe>...    foreground-driven profile switch
+                                      (--fg/--bg/--switch-delay/--dry-run)
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)
@@ -466,6 +476,7 @@ internal static class Program
               neoswitch switch 1
               neoswitch watch --app valorant.exe --app cs2.exe --fg 1 --bg 0
               neoswitch watch --app notepad.exe --dry-run
+              neoswitch watch --app cs2.exe --fg 1 --bg 0 --switch-delay 300
             """);
     }
 }
