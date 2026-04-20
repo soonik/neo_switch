@@ -691,17 +691,28 @@ internal sealed class PickRunningDialog : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
-        var footer = new FlowLayoutPanel
+        // TableLayoutPanel + Anchor=None centres the Add / Cancel buttons on
+        // the same baseline; FlowLayoutPanel doesn't vertical-centre its
+        // children and leaves subtle 1-2 px offsets between them.
+        var footer = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
             Height = 48,
             Padding = new Padding(12, 8, 12, 8),
-            FlowDirection = FlowDirection.RightToLeft,
+            ColumnCount = 3,
+            RowCount = 1,
             BackColor = Theme.Panel,
         };
-        ok.Margin = new Padding(8, 0, 0, 0);
-        footer.Controls.Add(ok);
-        footer.Controls.Add(cancel);
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        cancel.Anchor = AnchorStyles.None;
+        ok.Anchor     = AnchorStyles.None;
+        cancel.Margin = new Padding(0, 0, 8, 0);
+        ok.Margin     = new Padding(0);
+        footer.Controls.Add(cancel, 1, 0);
+        footer.Controls.Add(ok,     2, 0);
 
         var container = new Panel
         {
