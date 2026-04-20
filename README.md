@@ -73,7 +73,11 @@ dotnet run --project src/NeoSwitch.Cli -- -v raw D0 B6          # verbose hex TX
 
 `watch` installs a `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` hook and flips
 the active profile whenever the foreground app enters/leaves the watched set.
-Redundant switches (same target two times in a row) are skipped.
+Redundant switches (same target two times in a row) are skipped, and the
+actual HID write is debounced by `--switch-delay <ms>` (default **200 ms**)
+so that modifier keys held during an Alt+Tab gesture have time to release
+before the firmware re-initialises its key matrix — without this, key-up
+events for Alt/Tab were being lost mid-switch and stuck in the OS.
 
 ```powershell
 # switch to profile 1 when any of these is foreground, 0 otherwise
@@ -83,23 +87,32 @@ dotnet run --project src/NeoSwitch.Cli -- watch `
 
 # observe the decisions without touching the keyboard
 dotnet run --project src/NeoSwitch.Cli -- watch --app notepad.exe --dry-run
+
+# tune the debounce if 200 ms isn't enough cushion for fast alt-tab chains
+dotnet run --project src/NeoSwitch.Cli -- watch --app cs2.exe --switch-delay 300
 ```
 
-Output (one line per foreground transition):
+Output (one `SWITCH` line per foreground transition + one `SENT` line per
+debounced HID write):
 
 ```
 connected: QwertyKeys / QK75 Max  (profiles=4, current=0)
 watching 2 app(s): valorant.exe, cs2.exe
-fg profile = 1   bg profile = 0
+fg profile = 1   bg profile = 0   switch delay = 200ms
 
-[14:32:07] SWITCH * fg=valorant.exe                    -> profile 1
-[14:34:15] SWITCH   fg=explorer.exe                    -> profile 0
-[14:34:22]           fg=chrome.exe                     -> profile 0
-[14:35:01] SWITCH * fg=cs2.exe                         -> profile 1
+[14:32:07.412] SWITCH * fg=valorant.exe                    -> profile 1
+[14:32:07.620]   SENT profile 1
+[14:34:15.880] SWITCH   fg=explorer.exe                    -> profile 0
+[14:34:16.087]   SENT profile 0
+[14:34:22.140]          fg=chrome.exe                      -> profile 0
+[14:35:01.330] SWITCH * fg=cs2.exe                         -> profile 1
+[14:35:01.538]   SENT profile 1
 ```
 
-`SWITCH` means an HID command was sent; the leading `*` marks the foreground
-app as one of the watched exes. Ctrl+C to stop.
+`SWITCH` = decision changed (HID write scheduled). `SENT` = HID write
+actually committed `--switch-delay` ms later. `*` = foreground exe is in
+the watched set. If the user alt-tabs through several apps faster than
+the debounce window, only the final target is committed. Ctrl+C to stop.
 
 Published single-file exe (once built):
 
