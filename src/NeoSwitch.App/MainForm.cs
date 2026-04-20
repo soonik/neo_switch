@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using HidSharp;
 using NeoSwitch.Core;
 
@@ -12,14 +13,26 @@ public sealed class MainForm : Form
     private Settings S => _store.Current;
 
     // Header
-    private readonly Label _statusDot = new() { AutoSize = true, Font = new Font("Segoe UI", 14f), Text = "●" };
-    private readonly ComboBox _cbDevice = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300 };
-    private readonly Label _kbInfo  = new() { AutoSize = true, ForeColor = SystemColors.GrayText, Text = "" };
-    private readonly Label _kbProfile = new() { AutoSize = true, Text = "" };
+    private readonly StatusDot _statusDot = new() { Margin = new Padding(0, 6, 8, 0) };
+    private readonly ComboBox _cbDevice = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        FlatStyle = FlatStyle.Flat,
+        Width = 300,
+        BackColor = Theme.InputBg,
+        ForeColor = Theme.Text,
+    };
+    private readonly Label _kbInfo = new()
+    {
+        AutoSize = true, ForeColor = Theme.Muted, Text = "",
+        Font = Theme.Body,
+    };
+    private readonly ChipLabel _profileChip = new() { Text = "", Visible = false };
     private readonly Button _btnReconnect = new() { Text = "Reconnect", AutoSize = true };
 
-    // Device-picker state
+    // Suppress flags — prevent setter-driven events from re-entering handlers.
     private bool _cbDeviceSuppressEvent;
+    private bool _startupSuppressEvent;
     private readonly List<DeviceChoice> _deviceChoices = new();
 
     private sealed record DeviceChoice(int? VendorId, int? ProductId, string Display)
@@ -28,26 +41,38 @@ public sealed class MainForm : Form
     }
 
     // Watched apps
-    private readonly ListBox _listApps = new() { IntegralHeight = false, SelectionMode = SelectionMode.MultiExtended };
-    private readonly Button _btnAddFile = new() { Text = "Add from file…", AutoSize = true };
-    private readonly Button _btnAddRunning = new() { Text = "Add running process…", AutoSize = true };
-    private readonly Button _btnRemove = new() { Text = "Remove", AutoSize = true };
+    private readonly ListBox _listApps = new()
+    {
+        IntegralHeight = false,
+        SelectionMode = SelectionMode.MultiExtended,
+        BorderStyle = BorderStyle.FixedSingle,
+        BackColor = Theme.InputBg,
+        ForeColor = Theme.Text,
+        Font = Theme.Body,
+    };
+    private readonly Button _btnAddFile = new() { Text = "＋ Add from file…" };
+    private readonly Button _btnAddRunning = new() { Text = "＋ Add running process…" };
+    private readonly Button _btnRemove = new() { Text = "Remove" };
 
     // Profile mapping
-    private readonly NumericUpDown _nudFg = new() { Minimum = 0, Maximum = 15, Width = 60 };
-    private readonly NumericUpDown _nudBg = new() { Minimum = 0, Maximum = 15, Width = 60 };
-    private readonly Label _fgPreview = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
-    private readonly Label _bgPreview = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
-    private readonly CheckBox _cbPause = new() { Text = "Pause switching", AutoSize = true };
-    private readonly CheckBox _cbStartup = new() { Text = "Start with Windows", AutoSize = true };
-    private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 80 };
-    private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 80 };
+    private readonly NumericUpDown _nudFg = new() { Minimum = 0, Maximum = 15, Width = 70 };
+    private readonly NumericUpDown _nudBg = new() { Minimum = 0, Maximum = 15, Width = 70 };
+    private readonly Label _fgPreview = new() { AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Body };
+    private readonly Label _bgPreview = new() { AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Body };
+    private readonly ToggleSwitch _tsPause = new();
+    private readonly ToggleSwitch _tsStartup = new();
+    private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 90 };
+    private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 90 };
 
     // Footer
     private readonly Label _statusFooter = new()
     {
-        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = SystemColors.GrayText,
+        Dock = DockStyle.Fill,
+        TextAlign = ContentAlignment.MiddleLeft,
+        ForeColor = Theme.Muted,
+        Font = Theme.Code,
         Text = "(no events yet)",
+        Padding = new Padding(12, 0, 12, 0),
     };
 
     public MainForm(RuntimeController runtime, SettingsStore store, SynchronizationContext ui)
@@ -63,10 +88,34 @@ public sealed class MainForm : Form
         FormBorderStyle = FormBorderStyle.Sizable;
         ShowInTaskbar = true;
 
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
+        Font = Theme.Body;
+
+        // Style every themable control at construction time.
+        ButtonStyler.Flat(_btnReconnect);
+        ButtonStyler.Flat(_btnAddFile, primary: true);
+        ButtonStyler.Flat(_btnAddRunning);
+        ButtonStyler.Flat(_btnRemove);
+        StyleNumericUpDown(_nudFg);
+        StyleNumericUpDown(_nudBg);
+        StyleNumericUpDown(_nudSwitchDelay);
+        StyleNumericUpDown(_nudGateTimeout);
+
         BuildLayout();
         WireEvents();
         LoadFromSettings();
         RefreshUiFromRuntime();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (OperatingSystem.IsWindows())
+        {
+            DwmInterop.UseDarkTitleBar(Handle);
+            DwmInterop.UseRoundedCorners(Handle);
+        }
     }
 
     // ---------------- layout ----------------
@@ -79,9 +128,10 @@ public sealed class MainForm : Form
             ColumnCount = 1,
             RowCount = 3,
             Padding = new Padding(0),
+            BackColor = Theme.Background,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64f));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68f));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
 
@@ -102,11 +152,10 @@ public sealed class MainForm : Form
     {
         var p = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             ColumnCount = 5,
-            Height = 64,
-            Padding = new Padding(12, 10, 12, 10),
-            BackColor = SystemColors.ControlLight,
+            Padding = new Padding(16, 12, 16, 12),
+            BackColor = Theme.Panel,
         };
         p.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         p.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -117,21 +166,28 @@ public sealed class MainForm : Form
         var namePanel = new TableLayoutPanel
         {
             ColumnCount = 1, RowCount = 2, AutoSize = true,
-            Margin = new Padding(8, 0, 0, 0),
+            Margin = new Padding(0, 0, 12, 0),
+            BackColor = Color.Transparent,
         };
         _cbDevice.Margin = new Padding(0, 0, 0, 2);
         namePanel.Controls.Add(_cbDevice, 0, 0);
         namePanel.Controls.Add(_kbInfo,   0, 1);
 
-        _statusDot.ForeColor = Color.Gray;
-        _statusDot.Margin = new Padding(0, 4, 0, 0);
-
-        p.Controls.Add(_statusDot,  0, 0);
-        p.Controls.Add(namePanel,   1, 0);
-        p.Controls.Add(_kbProfile,  2, 0);
-        _kbProfile.Anchor = AnchorStyles.Right;
-        _kbProfile.Margin = new Padding(0, 10, 12, 0);
+        p.Controls.Add(_statusDot, 0, 0);
+        p.Controls.Add(namePanel,  1, 0);
+        p.Controls.Add(_profileChip, 2, 0);
+        _profileChip.Anchor = AnchorStyles.Right;
+        _profileChip.Margin = new Padding(0, 8, 12, 0);
         p.Controls.Add(_btnReconnect, 3, 0);
+        _btnReconnect.Margin = new Padding(0, 4, 0, 0);
+
+        // Subtle bottom border between header and body.
+        p.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Theme.Border);
+            e.Graphics.DrawLine(pen, 0, p.Height - 1, p.Width, p.Height - 1);
+        };
+
         return p;
     }
 
@@ -142,12 +198,11 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
             FixedPanel = FixedPanel.Panel2,
-            // Panel{1,2}MinSize intentionally NOT set in the initializer:
-            // SplitContainer's default Width is ~150, and settings that violate
-            // Panel1MinSize + Panel2MinSize + SplitterWidth <= Width put the
-            // control into a state where every later SplitterDistance=N
-            // assignment throws. Configure after first layout, under try/catch.
+            BackColor = Theme.Background,
         };
+        split.Panel1.BackColor = Theme.Background;
+        split.Panel2.BackColor = Theme.Background;
+        split.SplitterWidth = 1;
 
         this.Shown += (_, _) =>
         {
@@ -157,13 +212,13 @@ public sealed class MainForm : Form
                 int sw = split.SplitterWidth;
                 const int p1Min = 280;
                 const int p2Min = 360;
-                if (w < p1Min + p2Min + sw) return;  // too narrow for custom sizing
+                if (w < p1Min + p2Min + sw) return;
                 split.Panel1MinSize = p1Min;
                 split.Panel2MinSize = p2Min;
                 int target = Math.Clamp(w - 420, p1Min, w - p2Min - sw);
                 split.SplitterDistance = target;
             }
-            catch { /* fall back to defaults — better than crashing */ }
+            catch { }
         };
 
         // ---- left: watched apps ----
@@ -172,46 +227,66 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 3,
-            Padding = new Padding(12),
+            Padding = new Padding(16),
+            BackColor = Theme.Background,
         };
         left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var lblApps = new Label { Text = "WATCHED APPLICATIONS", AutoSize = true, Font = new Font("Segoe UI Semibold", 8.5f), ForeColor = SystemColors.GrayText, Margin = new Padding(0, 0, 0, 6) };
+
+        var lblApps = new Label
+        {
+            Text = "WATCHED APPLICATIONS",
+            AutoSize = true,
+            Font = Theme.SectionLbl,
+            ForeColor = Theme.Muted,
+            Margin = new Padding(0, 0, 0, 8),
+        };
         left.Controls.Add(lblApps, 0, 0);
         _listApps.Dock = DockStyle.Fill;
         left.Controls.Add(_listApps, 0, 1);
-        var btnRow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+
+        var btnRow = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0),
+            BackColor = Color.Transparent,
+        };
         btnRow.Controls.Add(_btnAddFile);
         btnRow.Controls.Add(_btnAddRunning);
         btnRow.Controls.Add(_btnRemove);
+        _btnAddFile.Margin = new Padding(0, 0, 8, 0);
+        _btnAddRunning.Margin = new Padding(0, 0, 8, 0);
         left.Controls.Add(btnRow, 0, 2);
         split.Panel1.Controls.Add(left);
 
         // ---- right: profile mapping ----
-        // AutoScroll lets narrow windows show a scrollbar instead of clipping.
         var right = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             AutoSize = false,
             AutoScroll = true,
-            Padding = new Padding(12),
+            Padding = new Padding(16),
+            BackColor = Theme.Background,
         };
         right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         right.Controls.Add(new Label
         {
-            Text = "PROFILE MAPPING", AutoSize = true, Font = new Font("Segoe UI Semibold", 8.5f),
-            ForeColor = SystemColors.GrayText, Margin = new Padding(0, 0, 0, 10),
+            Text = "PROFILE MAPPING",
+            AutoSize = true,
+            Font = Theme.SectionLbl,
+            ForeColor = Theme.Muted,
+            Margin = new Padding(0, 0, 0, 12),
         });
         right.Controls.Add(MakeFieldRow("Foreground profile", _nudFg, _fgPreview, "when a watched app is focused"));
         right.Controls.Add(MakeFieldRow("Background profile", _nudBg, _bgPreview, "when nothing watched is focused"));
-        right.Controls.Add(MakeFieldRow("Switch delay (ms)", _nudSwitchDelay, null, "debounce between foreground change and HID write"));
-        right.Controls.Add(MakeFieldRow("Gate timeout (ms)", _nudGateTimeout, null, "max wait for modifier keys to release"));
-        right.Controls.Add(_cbPause);
-        _cbStartup.Margin = new Padding(0, 6, 0, 0);
-        right.Controls.Add(_cbStartup);
+        right.Controls.Add(MakeFieldRow("Switch delay (ms)",  _nudSwitchDelay, null, "debounce before the HID write"));
+        right.Controls.Add(MakeFieldRow("Gate timeout (ms)",  _nudGateTimeout, null, "max wait for modifier keys to release"));
+        right.Controls.Add(MakeToggleRow(_tsPause,   "Pause switching", "observe foreground changes but send no HID"));
+        right.Controls.Add(MakeToggleRow(_tsStartup, "Start with Windows", "auto-launch NeoSwitch on logon"));
         split.Panel2.Controls.Add(right);
 
         return split;
@@ -219,23 +294,34 @@ public sealed class MainForm : Form
 
     private Control MakeFieldRow(string label, Control input, Control? preview, string hint)
     {
-        var row = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+        var row = new TableLayoutPanel
+        {
+            ColumnCount = 3, AutoSize = true, Margin = new Padding(0, 0, 0, 14),
+            BackColor = Color.Transparent,
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var lbl = new Label { Text = label, AutoSize = true, Margin = new Padding(0, 5, 6, 0) };
+        var lbl = new Label
+        {
+            Text = label, AutoSize = true,
+            Margin = new Padding(0, 6, 6, 0),
+            ForeColor = Theme.Text, Font = Theme.Body,
+        };
         row.Controls.Add(lbl, 0, 0);
         input.Margin = new Padding(0, 0, 10, 0);
         row.Controls.Add(input, 1, 0);
         if (preview != null)
         {
-            preview.Margin = new Padding(0, 5, 0, 0);
+            preview.Margin = new Padding(0, 6, 0, 0);
             row.Controls.Add(preview, 2, 0);
         }
         var hintLbl = new Label
         {
-            Text = hint, AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(0, 0, 0, 0),
+            Text = hint, AutoSize = true,
+            ForeColor = Theme.Muted, Font = Theme.Body,
+            Margin = new Padding(0, 2, 0, 0),
         };
         row.SetColumnSpan(hintLbl, 3);
         row.RowCount = 2;
@@ -243,13 +329,57 @@ public sealed class MainForm : Form
         return row;
     }
 
+    private Control MakeToggleRow(ToggleSwitch toggle, string label, string hint)
+    {
+        var row = new TableLayoutPanel
+        {
+            ColumnCount = 2, AutoSize = true, Margin = new Padding(0, 0, 0, 10),
+            BackColor = Color.Transparent,
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        toggle.Margin = new Padding(0, 2, 10, 0);
+        row.Controls.Add(toggle, 0, 0);
+
+        var textPanel = new TableLayoutPanel
+        {
+            ColumnCount = 1, RowCount = 2, AutoSize = true,
+            BackColor = Color.Transparent,
+        };
+        textPanel.Controls.Add(new Label
+        {
+            Text = label, AutoSize = true,
+            ForeColor = Theme.Text, Font = Theme.Body,
+            Margin = new Padding(0),
+        }, 0, 0);
+        textPanel.Controls.Add(new Label
+        {
+            Text = hint, AutoSize = true,
+            ForeColor = Theme.Muted, Font = Theme.Body,
+            Margin = new Padding(0, 1, 0, 0),
+        }, 0, 1);
+        row.Controls.Add(textPanel, 1, 0);
+        return row;
+    }
+
     private Control BuildFooter()
     {
-        var p = new Panel { Dock = DockStyle.Fill, BackColor = SystemColors.Control };
-        _statusFooter.Dock = DockStyle.Fill;
-        _statusFooter.Padding = new Padding(12, 0, 12, 0);
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Panel };
+        p.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Theme.Border);
+            e.Graphics.DrawLine(pen, 0, 0, p.Width, 0);
+        };
         p.Controls.Add(_statusFooter);
         return p;
+    }
+
+    private static void StyleNumericUpDown(NumericUpDown n)
+    {
+        n.BackColor = Theme.InputBg;
+        n.ForeColor = Theme.Text;
+        n.BorderStyle = BorderStyle.FixedSingle;
     }
 
     // ---------------- events ----------------
@@ -300,9 +430,9 @@ public sealed class MainForm : Form
         _nudSwitchDelay.ValueChanged += (_, _) => { S.SwitchDelayMs = (int)_nudSwitchDelay.Value; _store.Save(); };
         _nudGateTimeout.ValueChanged += (_, _) => { S.GateTimeoutMs = (int)_nudGateTimeout.Value; _store.Save(); };
 
-        _cbPause.CheckedChanged += (_, _) =>
+        _tsPause.CheckedChanged += (_, _) =>
         {
-            if (S.Paused == _cbPause.Checked) return;
+            if (S.Paused == _tsPause.Checked) return;
             _runtime.TogglePause();
             _store.Save();
         };
@@ -320,18 +450,19 @@ public sealed class MainForm : Form
             _runtime.Reconnect();
         };
 
-        _cbStartup.CheckedChanged += (_, _) =>
+        _tsStartup.CheckedChanged += (_, _) =>
         {
             if (!OperatingSystem.IsWindows()) return;
-            bool desired = _cbStartup.Checked;
+            if (_startupSuppressEvent) return;
+            bool desired = _tsStartup.Checked;
             bool ok = StartupRegistrar.SetEnabled(desired);
             S.StartWithWindows = ok && desired;
             _store.Save();
             if (!ok)
             {
-                _cbDeviceSuppressEvent = true;
-                _cbStartup.Checked = StartupRegistrar.IsEnabled();
-                _cbDeviceSuppressEvent = false;
+                _startupSuppressEvent = true;
+                _tsStartup.Checked = StartupRegistrar.IsEnabled();
+                _startupSuppressEvent = false;
             }
         };
 
@@ -365,19 +496,19 @@ public sealed class MainForm : Form
         _nudBg.Value = Math.Min(_nudBg.Maximum, S.BackgroundProfile);
         _nudSwitchDelay.Value = Math.Clamp(S.SwitchDelayMs, (int)_nudSwitchDelay.Minimum, (int)_nudSwitchDelay.Maximum);
         _nudGateTimeout.Value = Math.Clamp(S.GateTimeoutMs, (int)_nudGateTimeout.Minimum, (int)_nudGateTimeout.Maximum);
-        _cbPause.Checked = S.Paused;
+        _tsPause.Checked = S.Paused;
 
         if (OperatingSystem.IsWindows())
         {
-            _cbDeviceSuppressEvent = true;
+            _startupSuppressEvent = true;
             bool actual = StartupRegistrar.IsEnabled();
-            _cbStartup.Checked = actual;
+            _tsStartup.Checked = actual;
             if (actual != S.StartWithWindows) { S.StartWithWindows = actual; _store.Save(); }
-            _cbDeviceSuppressEvent = false;
+            _startupSuppressEvent = false;
         }
         else
         {
-            _cbStartup.Enabled = false;
+            _tsStartup.Enabled = false;
         }
 
         ReloadAppsListBox();
@@ -436,10 +567,7 @@ public sealed class MainForm : Form
         _listApps.EndUpdate();
     }
 
-    private void AppendLog(string line)
-    {
-        _statusFooter.Text = line;
-    }
+    private void AppendLog(string line) => _statusFooter.Text = line;
 
     private void UpdateProfilePreview()
     {
@@ -458,35 +586,32 @@ public sealed class MainForm : Form
 
     private void RefreshUiFromRuntime()
     {
-        switch (_runtime.State)
+        _statusDot.DotColor = _runtime.State switch
         {
-            case RuntimeState.Connected:
-                _statusDot.ForeColor = Color.ForestGreen;
-                break;
-            case RuntimeState.Paused:
-                _statusDot.ForeColor = Color.Goldenrod;
-                break;
-            case RuntimeState.Connecting:
-                _statusDot.ForeColor = Color.DeepSkyBlue;
-                break;
-            case RuntimeState.Error:
-                _statusDot.ForeColor = Color.IndianRed;
-                break;
-            default:
-                _statusDot.ForeColor = Color.Gray;
-                break;
-        }
+            RuntimeState.Connected  => Theme.Good,
+            RuntimeState.Paused     => Theme.Warn,
+            RuntimeState.Connecting => Theme.Accent,
+            RuntimeState.Error      => Theme.Error,
+            _                       => Theme.Idle,
+        };
 
         _kbInfo.Text = _runtime.ConnectedProduct != null
-            ? $"vid=0x{_runtime.ConnectedVid:X4}  pid=0x{_runtime.ConnectedPid:X4}"
+            ? $"vid=0x{_runtime.ConnectedVid:X4}  ·  pid=0x{_runtime.ConnectedPid:X4}"
             : _runtime.StateDetail ?? "";
 
-        string profileLabel = _runtime.CurrentProfileIdx is byte idx
-            ? $"Active: profile {idx}  {ProfileNameFor(_runtime.Profiles, idx)}"
-            : "";
-        _kbProfile.Text = profileLabel;
+        if (_runtime.CurrentProfileIdx is byte idx)
+        {
+            string name = ProfileNameFor(_runtime.Profiles, idx);
+            _profileChip.Text = string.IsNullOrWhiteSpace(name)
+                ? $"Active: profile {idx}"
+                : $"Active: profile {idx} · {name.Split(' ')[0]}";
+            _profileChip.Visible = true;
+        }
+        else
+        {
+            _profileChip.Visible = false;
+        }
 
-        // Clamp NumericUpDowns to actual profile count if known.
         if (_runtime.ProfileCount is byte count && count > 0)
         {
             _nudFg.Maximum = count - 1;
@@ -520,25 +645,55 @@ public sealed class MainForm : Form
 /// <summary>Modal picker for a running executable, used by "Add running process…".</summary>
 internal sealed class PickRunningDialog : Form
 {
-    private readonly ListBox _list = new() { Dock = DockStyle.Fill, SelectionMode = SelectionMode.MultiExtended };
+    private readonly ListBox _list = new()
+    {
+        Dock = DockStyle.Fill,
+        SelectionMode = SelectionMode.MultiExtended,
+        BackColor = Theme.InputBg,
+        ForeColor = Theme.Text,
+        Font = Theme.Body,
+        BorderStyle = BorderStyle.FixedSingle,
+    };
 
     public IReadOnlyList<string> SelectedExecutables { get; private set; } = Array.Empty<string>();
 
     public PickRunningDialog()
     {
         Text = "Pick a running process";
-        Width = 420; Height = 520;
+        ClientSize = new Size(460, 520);
         StartPosition = FormStartPosition.CenterParent;
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
+        Font = Theme.Body;
 
-        var ok = new Button { Text = "Add", DialogResult = DialogResult.OK, Dock = DockStyle.Right, Width = 80 };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Dock = DockStyle.Right, Width = 80 };
-        AcceptButton = ok; CancelButton = cancel;
+        var ok     = new Button { Text = "Add",    DialogResult = DialogResult.OK,     AutoSize = true };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        ButtonStyler.Flat(ok, primary: true);
+        ButtonStyler.Flat(cancel);
+        AcceptButton = ok;
+        CancelButton = cancel;
 
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 40 };
-        footer.Controls.Add(cancel);
+        var footer = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 48,
+            Padding = new Padding(12, 8, 12, 8),
+            FlowDirection = FlowDirection.RightToLeft,
+            BackColor = Theme.Panel,
+        };
+        ok.Margin = new Padding(8, 0, 0, 0);
         footer.Controls.Add(ok);
+        footer.Controls.Add(cancel);
 
-        Controls.Add(_list);
+        var container = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(12),
+            BackColor = Theme.Background,
+        };
+        container.Controls.Add(_list);
+
+        Controls.Add(container);
         Controls.Add(footer);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -557,5 +712,15 @@ internal sealed class PickRunningDialog : Form
         {
             SelectedExecutables = _list.SelectedItems.Cast<string>().ToArray();
         };
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (OperatingSystem.IsWindows())
+        {
+            DwmInterop.UseDarkTitleBar(Handle);
+            DwmInterop.UseRoundedCorners(Handle);
+        }
     }
 }
