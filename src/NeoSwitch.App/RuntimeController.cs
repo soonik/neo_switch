@@ -53,7 +53,7 @@ public sealed class RuntimeController : IDisposable
     /// <summary>Raised whenever HidSharp reports a device-list change.</summary>
     public event Action? DevicesChanged;
 
-    private readonly EventHandler _hidChangedHandler;
+    private readonly EventHandler<DeviceListChangedEventArgs> _hidChangedHandler;
     private int _reconnectScheduled;  // 0 = idle, 1 = queued; interlocked
 
     public RuntimeController(Settings settings)
