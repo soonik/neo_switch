@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>QwertyKeys profile switcher (minimal)</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  button { padding: .5rem 1rem; margin: .25rem; }
+  pre { background: #111; color: #eee; padding: .75rem; overflow: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: .25rem; }
+</style>
+
+<h1>QwertyKeys profile switcher</h1>
+<p>
+  Reimplementation of the single HID command <code>he.qwertykeys.com</code>
+  sends to change the active profile. Chrome/Edge only (WebHID).
+</p>
+
+<button id="connect">Connect keyboard</button>
+<div class="row" id="profiles" hidden>
+  <button data-i="0">Profile 0</button>
+  <button data-i="1">Profile 1</button>
+  <button data-i="2">Profile 2</button>
+  <button data-i="3">Profile 3</button>
+</div>
+<button id="query" hidden>Query current profile</button>
+
+<pre id="log"></pre>
+
+<script>
+// Protocol constants reverse-engineered from he.qwertykeys.com (index-BLg4-D7h.js).
+// Raw-HID interface fingerprint — identical to QMK/VIA:
+const HID_FILTER = { usagePage: 0xFF60, usage: 0x61 };
+
+// QwertyKeys "actuation" extension is layered on top of VIA:
+//   every command is a 32-byte output report on report ID 0,
+//   starting with base opcode 0xD0 followed by a sub-opcode.
+const VIA_CUSTOM_CMD       = 0xD0;  // base VIA opcode for the extension
+const SUB_GET_PROFILE_IDX  = 0xB0;  // reply: [D0, B0, idx]
+const SUB_SET_PROFILE_IDX  = 0xB1;  // payload: [idx]
+const SUB_GET_PROFILE_CNT  = 0xB6;  // reply: [D0, B6, count]
+
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; };
+const hex = (u8) => [...u8].map(b => b.toString(16).padStart(2,'0')).join(' ');
+
+let device = null;
+
+async function connect() {
+  const [d] = await navigator.hid.requestDevice({ filters: [HID_FILTER] });
+  if (!d) return log('no device selected');
+  if (!d.opened) await d.open();
+  device = d;
+  log('connected:', d.productName, `(vid=${d.vendorId.toString(16)} pid=${d.productId.toString(16)})`);
+  document.getElementById('profiles').hidden = false;
+  document.getElementById('query').hidden = false;
+}
+
+// Send a 32-byte report and wait for the next inputreport.
+// VIA protocol: first N bytes of the reply echo the request header.
+async function send(bytes) {
+  const buf = new Uint8Array(32);
+  buf.set(bytes);
+  const reply = new Promise(res => {
+    const onInput = (e) => {
+      device.removeEventListener('inputreport', onInput);
+      res(new Uint8Array(e.data.buffer));
+    };
+    device.addEventListener('inputreport', onInput);
+  });
+  await device.sendReport(0, buf);
+  return reply;
+}
+
+async function actuation(subCmd, args = []) {
+  return send([VIA_CUSTOM_CMD, subCmd, ...args]);
+}
+
+async function switchProfile(i) {
+  log(`-> switchProfile(${i})  [bytes: D0 B1 ${i.toString(16).padStart(2,'0')}]`);
+  const r = await actuation(SUB_SET_PROFILE_IDX, [i]);
+  log('<-', hex(r.slice(0, 4)), '...');
+}
+
+async function queryProfile() {
+  const r = await actuation(SUB_GET_PROFILE_IDX);
+  const idx = r[2];
+  log(`current profile idx = ${idx}`);
+  const c = await actuation(SUB_GET_PROFILE_CNT);
+  log(`profile count = ${c[2]}`);
+}
+
+document.getElementById('connect').onclick = connect;
+document.getElementById('query').onclick = queryProfile;
+for (const b of document.querySelectorAll('#profiles button')) {
+  b.onclick = () => switchProfile(+b.dataset.i);
+}
+
+if (!navigator.hid) log('WebHID not supported in this browser');
+</script>
