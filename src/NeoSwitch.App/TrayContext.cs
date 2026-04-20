@@ -19,10 +19,16 @@ public sealed class TrayContext : ApplicationContext
 
     public TrayContext()
     {
-        // Captured on the UI thread — posts back to the WinForms message pump.
-        _ui = SynchronizationContext.Current
-              ?? throw new InvalidOperationException(
-                  "TrayContext must be constructed on the WinForms UI thread.");
+        // WinForms installs its SynchronizationContext lazily during
+        // Application.Run, so SynchronizationContext.Current may still be
+        // null here in the ctor. Grab an existing one if present, otherwise
+        // construct a WindowsFormsSynchronizationContext ourselves — its ctor
+        // attaches to the current STA thread's message queue and Post() will
+        // dispatch once Application.Run starts pumping.
+        _ui = SynchronizationContext.Current as WindowsFormsSynchronizationContext
+              ?? new WindowsFormsSynchronizationContext();
+        if (SynchronizationContext.Current is null)
+            SynchronizationContext.SetSynchronizationContext(_ui);
 
         _store   = new SettingsStore();
         _runtime = new RuntimeController(_store.Current);
