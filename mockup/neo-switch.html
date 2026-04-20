@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>NeoSwitch — UI mockup</title>
+<style>
+  :root {
+    --bg: #202020;
+    --panel: #2b2b2b;
+    --panel-2: #333;
+    --border: #3f3f3f;
+    --text: #e6e6e6;
+    --muted: #9a9a9a;
+    --accent: #4cc2ff;   /* Win11-ish blue */
+    --accent-2: #3aa8e0;
+    --green: #6ccf76;
+    --red: #e66;
+    --chrome: #1a1a1a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #101010; color: var(--text);
+               font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+  .stage { display: grid; grid-template-columns: 1fr 320px; gap: 32px;
+           padding: 32px; align-items: start; }
+  .caption { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+
+  /* Window chrome */
+  .window { background: var(--bg); border-radius: 8px; overflow: hidden;
+            box-shadow: 0 16px 40px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.4);
+            border: 1px solid #000; }
+  .titlebar { background: var(--chrome); height: 32px; display: flex;
+              align-items: center; padding: 0 12px; gap: 10px;
+              border-bottom: 1px solid var(--border); }
+  .titlebar .title { flex: 1; font-size: 12px; color: var(--muted); letter-spacing: .3px; }
+  .titlebar .btns { display: flex; gap: 0; }
+  .titlebar .btns span { width: 46px; height: 32px; display: inline-flex;
+                         align-items: center; justify-content: center;
+                         color: var(--muted); font-size: 10px; }
+  .titlebar .btns span:hover { background: #2c2c2c; color: var(--text); }
+  .titlebar .btns .close:hover { background: #c42b1c; color: #fff; }
+  .logo { width: 16px; height: 16px; border-radius: 3px;
+          background: linear-gradient(135deg, var(--accent), #7a5af8); }
+
+  /* Main window layout */
+  .main { width: 780px; }
+  .header-strip { display: flex; align-items: center; gap: 12px;
+                  padding: 14px 16px; border-bottom: 1px solid var(--border);
+                  background: var(--panel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+         box-shadow: 0 0 0 3px rgba(108,207,118,.15); }
+  .dot.off { background: #777; box-shadow: none; }
+  .kb { font-weight: 600; }
+  .kb-sub { color: var(--muted); font-size: 12px; }
+  .chip { background: #153047; color: var(--accent); padding: 2px 8px;
+          border-radius: 10px; font-size: 11px; border: 1px solid #1e4763; }
+  .spacer { flex: 1; }
+
+  button.btn {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  button.btn:hover { background: #3c3c3c; }
+  button.btn.primary { background: var(--accent); color: #0a1520; border-color: transparent; }
+  button.btn.primary:hover { background: var(--accent-2); }
+  button.btn.ghost { background: transparent; }
+  button.btn.danger { color: #ffb5b5; border-color: #5a2a2a; }
+
+  .body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 0; }
+  .pane { padding: 16px; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text);
+        text-transform: uppercase; letter-spacing: .5px; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  /* Watched app list */
+  .list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+          background: #262626; }
+  .list .row { display: grid; grid-template-columns: 22px 1fr auto;
+               gap: 10px; padding: 8px 10px; align-items: center;
+               border-bottom: 1px solid #2f2f2f; }
+  .list .row:last-child { border-bottom: none; }
+  .list .row.head { background: #2b2b2b; color: var(--muted); font-size: 11px;
+                    text-transform: uppercase; letter-spacing: .5px; }
+  .list .row.active { background: #1b3344; }
+  .list .row .ico { width: 18px; height: 18px; border-radius: 3px;
+                    background: #555; display: inline-block; }
+  .list .row .ico.val { background: linear-gradient(135deg,#fa4454,#ff897a); }
+  .list .row .ico.cs  { background: linear-gradient(135deg,#f5a623,#d17a00); }
+  .list .row .ico.osu { background: linear-gradient(135deg,#ff66aa,#e23d8e); }
+  .list .path { color: var(--muted); font-size: 11px; }
+  .list .name { font-weight: 600; }
+  .list .remove { opacity: 0; }
+  .list .row:hover .remove { opacity: 1; }
+
+  .list-buttons { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* Right pane form */
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; color: var(--muted);
+                 margin-bottom: 4px; }
+  .stepper { display: inline-flex; align-items: stretch;
+             border: 1px solid var(--border); border-radius: 4px;
+             overflow: hidden; background: #262626; }
+  .stepper input { width: 56px; border: none; background: transparent;
+                   color: var(--text); text-align: center; font: inherit;
+                   padding: 6px 0; outline: none; }
+  .stepper button { border: none; background: #2f2f2f; color: var(--text);
+                    width: 26px; cursor: pointer; }
+  .profile-preview { display: inline-flex; align-items: center; gap: 8px;
+                     margin-left: 8px; vertical-align: middle; color: var(--muted);
+                     font-size: 12px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  .toggles { display: flex; gap: 16px; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px;
+            user-select: none; cursor: pointer; }
+  .toggle .track { width: 32px; height: 18px; border-radius: 10px;
+                   background: #444; position: relative; transition: .15s; }
+  .toggle .thumb { width: 14px; height: 14px; border-radius: 50%;
+                   background: #ccc; position: absolute; top: 2px; left: 2px;
+                   transition: .15s; }
+  .toggle input { display: none; }
+  .toggle input:checked ~ .track { background: var(--accent); }
+  .toggle input:checked ~ .track .thumb { left: 16px; background: #0a1520; }
+
+  /* Footer */
+  .footer { border-top: 1px solid var(--border); background: var(--panel);
+            padding: 10px 16px; display: flex; align-items: center; gap: 14px;
+            font-size: 12px; color: var(--muted); }
+  .footer .live { color: var(--text); }
+  .footer code { background: #1a1a1a; padding: 1px 6px; border-radius: 3px;
+                 color: #dcdcaa; font-size: 11px; }
+
+  /* Tray column */
+  .tray-col { display: flex; flex-direction: column; gap: 28px; }
+  .taskbar { background: #1b1b1b; padding: 8px 12px; border-radius: 6px;
+             display: flex; align-items: center; gap: 8px;
+             border: 1px solid var(--border); position: relative; }
+  .tray-icons { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+  .tray-icons .ti { width: 20px; height: 20px; border-radius: 3px; background: #333; }
+  .tray-icons .ti.neo { background: linear-gradient(135deg, var(--accent), #7a5af8);
+                        box-shadow: 0 0 0 2px rgba(76,194,255,.35); position: relative; }
+  .tray-icons .ti.neo::after { content:'●'; color:#6ccf76; position:absolute;
+                               right:-2px; bottom:-4px; font-size: 10px; }
+  .clock { color: var(--muted); font-size: 11px; margin-left: 10px; text-align: right;
+           line-height: 1.1; }
+
+  .tray-menu { background: #252525; border-radius: 6px;
+               box-shadow: 0 8px 24px rgba(0,0,0,.55), 0 0 0 1px #000;
+               border: 1px solid #3a3a3a; min-width: 260px; padding: 4px 0;
+               position: relative; }
+  .tray-menu::before { content: ''; position: absolute; right: 38px; bottom: -6px;
+                       border: 6px solid transparent; border-top-color: #252525; }
+  .tray-menu .mi { padding: 7px 14px; display: flex; align-items: center; gap: 10px;
+                   cursor: default; font-size: 13px; }
+  .tray-menu .mi:hover { background: #2f3a48; }
+  .tray-menu .mi.disabled { color: var(--muted); }
+  .tray-menu .mi .kbd { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .tray-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .tray-menu .mi .check { width: 14px; color: var(--accent); }
+  .tray-menu .header-mi { padding: 8px 14px; background: #1d1d1d;
+                          border-bottom: 1px solid var(--border);
+                          color: var(--muted); font-size: 11px;
+                          text-transform: uppercase; letter-spacing: .4px; }
+
+  h1.page { font: 600 15px/1 "Segoe UI", sans-serif; color: #fff;
+            margin: 0 0 20px; letter-spacing: .3px; }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+
+<div class="stage">
+  <!-- ======== MAIN WINDOW ======== -->
+  <section>
+    <h1 class="page">Main window — default state</h1>
+
+    <div class="window main">
+      <div class="titlebar">
+        <div class="logo"></div>
+        <div class="title">NeoSwitch</div>
+        <div class="btns">
+          <span>&#x2014;</span>
+          <span>&#x2610;</span>
+          <span class="close">&#x2715;</span>
+        </div>
+      </div>
+
+      <!-- Header strip -->
+      <div class="header-strip">
+        <div class="dot"></div>
+        <div>
+          <div class="kb">QK75 Max</div>
+          <div class="kb-sub">vid&nbsp;0x1ea7 · pid&nbsp;0x0907</div>
+        </div>
+        <div class="chip">Active: profile 1 · Aim</div>
+        <div class="spacer"></div>
+        <button class="btn ghost">Reconnect</button>
+        <button class="btn">Change…</button>
+      </div>
+
+      <!-- Two-pane body -->
+      <div class="body">
+        <!-- Left: watched apps -->
+        <div class="pane">
+          <h2>Watched applications</h2>
+          <p class="muted">When any of these are in the foreground, NeoSwitch activates the <b>foreground profile</b>. Otherwise it falls back to the <b>background profile</b>.</p>
+
+          <div class="list">
+            <div class="row head"><span></span><span>App</span><span>Path</span></div>
+            <div class="row active">
+              <span class="ico val"></span>
+              <div>
+                <div class="name">VALORANT.exe <span class="chip" style="margin-left:6px">foreground now</span></div>
+                <div class="path">C:\Riot Games\VALORANT\live\VALORANT.exe</div>
+              </div>
+              <button class="btn ghost remove">Remove</button>
+            </div>
+            <div class="row">
+              <span class="ico cs"></span>
+              <div>
+                <div class="name">cs2.exe</div>
+                <div class="path">C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe</div>
+              </div>
+              <button class="btn ghost remove">Remove</button>
+            </div>
+            <div class="row">
+              <span class="ico osu"></span>
+              <div>
+                <div class="name">osu!.exe</div>
+                <div class="path">C:\Users\you\AppData\Local\osu!\osu!.exe</div>
+              </div>
+              <button class="btn ghost remove">Remove</button>
+            </div>
+          </div>
+
+          <div class="list-buttons">
+            <button class="btn primary">＋ Add from file…</button>
+            <button class="btn">＋ Add from running apps…</button>
+            <button class="btn ghost danger">Clear all</button>
+          </div>
+        </div>
+
+        <!-- Right: profile config -->
+        <div class="pane">
+          <h2>Profile mapping</h2>
+
+          <div class="field">
+            <label>Foreground profile <span class="muted">(when a watched app is focused)</span></label>
+            <span class="stepper">
+              <button>−</button><input value="1"><button>＋</button>
+            </span>
+            <span class="profile-preview">
+              <span class="swatch" style="background:#fa4454"></span>
+              <span>Aim</span>
+            </span>
+          </div>
+
+          <div class="field">
+            <label>Background profile <span class="muted">(when nothing watched is focused)</span></label>
+            <span class="stepper">
+              <button>−</button><input value="0"><button>＋</button>
+            </span>
+            <span class="profile-preview">
+              <span class="swatch" style="background:#7a5af8"></span>
+              <span>Typing</span>
+            </span>
+          </div>
+
+          <div class="field">
+            <label>Behaviour</label>
+            <div class="toggles" style="flex-direction:column; gap:10px;">
+              <label class="toggle">
+                <input type="checkbox" checked>
+                <span class="track"><span class="thumb"></span></span>
+                <span>Switch only on profile change <span class="muted">(recommended)</span></span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox">
+                <span class="track"><span class="thumb"></span></span>
+                <span>Pause all switching</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" checked>
+                <span class="track"><span class="thumb"></span></span>
+                <span>Start with Windows</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" checked>
+                <span class="track"><span class="thumb"></span></span>
+                <span>Minimise to tray on close</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <span>Foreground:</span>
+        <code class="live">VALORANT.exe</code>
+        <span>•</span>
+        <span>Last sent:</span>
+        <code>D0 B1 01</code>
+        <span>•</span>
+        <span>Events today: <span class="live">47</span></span>
+        <div class="spacer" style="flex:1"></div>
+        <span>v0.1.0-draft</span>
+      </div>
+    </div>
+
+    <p class="legend">
+      ✕ minimises to tray. Exit is via the tray context menu.
+      Double-click tray icon to re-open this window.
+    </p>
+  </section>
+
+  <!-- ======== TRAY COLUMN ======== -->
+  <section class="tray-col">
+    <div>
+      <h1 class="page">Tray — icon & tooltip</h1>
+      <div class="taskbar">
+        <div style="color:var(--muted); font-size:11px">System tray</div>
+        <div class="tray-icons">
+          <div class="ti"></div>
+          <div class="ti"></div>
+          <div class="ti neo" title="NeoSwitch"></div>
+          <div class="clock">14:32<br>Apr 20</div>
+        </div>
+      </div>
+      <p class="legend">Green dot overlay = keyboard connected. Tooltip:<br>
+        <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">NeoSwitch — QK75 Max · Profile 1 (Aim)</code></p>
+    </div>
+
+    <div>
+      <h1 class="page">Tray — right-click menu</h1>
+      <div class="tray-menu">
+        <div class="header-mi">QK75 Max · profile 1 · Aim</div>
+        <div class="mi"><span>&#x1F441;</span> Open NeoSwitch <span class="kbd">Double-click</span></div>
+        <div class="sep"></div>
+        <div class="mi"><span class="check">✓</span> Switching enabled</div>
+        <div class="mi">Force profile ▸</div>
+        <div class="mi">Reconnect keyboard</div>
+        <div class="sep"></div>
+        <div class="mi disabled">Foreground: VALORANT.exe</div>
+        <div class="mi disabled">Last sent: D0 B1 01</div>
+        <div class="sep"></div>
+        <div class="mi">Exit</div>
+      </div>
+    </div>
+
+    <div>
+      <h1 class="page">Empty state (no keyboard)</h1>
+      <div class="window" style="width: 320px;">
+        <div class="titlebar">
+          <div class="logo"></div><div class="title">NeoSwitch</div>
+          <div class="btns"><span>—</span><span>□</span><span class="close">✕</span></div>
+        </div>
+        <div class="header-strip">
+          <div class="dot off"></div>
+          <div><div class="kb">No keyboard</div>
+               <div class="kb-sub">Connect a QwertyKeys device</div></div>
+          <div class="spacer"></div>
+          <button class="btn primary">Scan</button>
+        </div>
+        <div style="padding: 22px 16px; text-align:center; color:var(--muted); font-size:12px;">
+          Plug in the keyboard, then press <b>Scan</b>.<br>
+          NeoSwitch matches on HID usage <code>0xFF60 / 0x61</code>.
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
