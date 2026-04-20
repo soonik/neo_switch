@@ -228,6 +228,13 @@ internal static class Program
         using var watcher = new ForegroundWatcher();
         using var switcher = new DebouncedSwitcher(kb, cfg.SwitchDelayMs);
 
+        if (cfg.LogFiltered)
+        {
+            watcher.Skipped += s =>
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss.fff}]   SKIP      class='{s.WindowClass}' exe={s.Executable}  ({s.Reason})");
+        }
+
         switcher.Sent += target =>
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   SENT profile {target}");
         switcher.Failed += (target, ex) =>
@@ -264,7 +271,9 @@ internal static class Program
         return 0;
     }
 
-    sealed record WatchArgs(List<string> Apps, byte FgProfile, byte BgProfile, bool DryRun, int SwitchDelayMs);
+    sealed record WatchArgs(
+        List<string> Apps, byte FgProfile, byte BgProfile,
+        bool DryRun, int SwitchDelayMs, bool LogFiltered);
 
     static WatchArgs ParseWatchArgs(string[] args)
     {
@@ -272,6 +281,7 @@ internal static class Program
         byte fg = 1, bg = 0;
         bool dry = false;
         int delayMs = 200;
+        bool logFiltered = false;
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
@@ -297,11 +307,14 @@ internal static class Program
                 case "--dry-run":
                     dry = true;
                     break;
+                case "--log-filtered":
+                    logFiltered = true;
+                    break;
                 default:
                     throw new FormatException($"watch: unknown option '{a}'");
             }
         }
-        return new WatchArgs(apps, fg, bg, dry, delayMs);
+        return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered);
     }
 
     static int CmdRaw(Options opts, string[] rest)
@@ -457,7 +470,7 @@ internal static class Program
               probe                   run transport + protocol checks (VIA 0x01, then D0 B0)
               raw <hex bytes>         send arbitrary command, print reply  (e.g. 'raw D0 B0')
               watch --app <exe>...    foreground-driven profile switch
-                                      (--fg/--bg/--switch-delay/--dry-run)
+                                      (--fg/--bg/--switch-delay/--dry-run/--log-filtered)
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)
@@ -477,6 +490,7 @@ internal static class Program
               neoswitch watch --app valorant.exe --app cs2.exe --fg 1 --bg 0
               neoswitch watch --app notepad.exe --dry-run
               neoswitch watch --app cs2.exe --fg 1 --bg 0 --switch-delay 300
+              neoswitch watch --app notepad.exe --log-filtered  # show filtered windows
             """);
     }
 }
