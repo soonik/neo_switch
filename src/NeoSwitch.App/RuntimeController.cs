@@ -87,6 +87,7 @@ public sealed class RuntimeController : IDisposable
         TransitionTo(RuntimeState.Connecting, "opening keyboard…");
 
         KeyboardClient? kb = null;
+        ForegroundWatcher? watcher = null;
         try
         {
             var dev = PickDevice();
@@ -100,18 +101,73 @@ public sealed class RuntimeController : IDisposable
             var profiles = kb.LoadAllProfiles();
             byte current = kb.GetCurrentProfileIdx();
 
+            // Build the pipeline up-front — everything wired, nothing started.
+            var engine = new RuleEngine
+            {
+                ForegroundProfile = _settings.ForegroundProfile,
+                BackgroundProfile = _settings.BackgroundProfile,
+            };
+            foreach (var app in _settings.WatchedApps) engine.WatchedExes.Add(app);
+
+            var switcher = new DebouncedSwitcher(kb, _settings.SwitchDelayMs)
+            {
+                Gate = () => !NeoSwitch.Core.ModifierKeys.AnyHeld(),
+                GateTimeoutMs = _settings.GateTimeoutMs,
+            };
+
+            switcher.Sent += target =>
+            {
+                lock (_lock)
+                {
+                    CurrentProfileIdx = target;
+                    LastSentProfile = target;
+                    LastSentAt = DateTime.Now;
+                }
+                Log($"SENT profile {target}");
+                RaiseStateChanged();
+            };
+            switcher.Failed += (target, ex) =>
+            {
+                Log($"SEND FAIL -> {target}: {ex.Message}");
+                TransitionTo(RuntimeState.Error, ex.Message);
+            };
+
+            engine.Decided += dec =>
+            {
+                lock (_lock) { LastForegroundExe = dec.App.Executable; }
+                RaiseStateChanged();
+                if (!dec.ProfileChanged) return;
+                if (_settings.Paused) { Log($"(paused)  fg={dec.App.Executable} -> would be {dec.TargetProfile}"); return; }
+                switcher.Schedule(dec.TargetProfile);
+            };
+
+            watcher = new ForegroundWatcher();
+            watcher.Changed += engine.OnForegroundChanged;
+
+            // Publish state atomically. watcher still isn't running, so no seed
+            // event can fire yet and nothing on another thread touches _lock
+            // through these handlers.
             lock (_lock)
             {
-                if (_disposed) { kb.Dispose(); return; }
+                if (_disposed) throw new ObjectDisposedException(nameof(RuntimeController));
                 _kb = kb;
+                _engine = engine;
+                _switcher = switcher;
+                _watcher = watcher;
                 ProfileCount = count;
                 Profiles = profiles;
                 CurrentProfileIdx = current;
                 ConnectedProduct = kb.ProductName;
                 ConnectedVid = kb.VendorId;
                 ConnectedPid = kb.ProductId;
-                InstallPipelineLocked();
             }
+
+            // Start the foreground hook OUTSIDE the lock. watcher.Start() fires
+            // a synchronous seed event on the pump thread for the current
+            // foreground window, which calls engine.Decided → lock(_lock).
+            // If this were still inside the lock above, we'd deadlock with
+            // ourselves.
+            watcher.Start();
 
             TransitionTo(
                 _settings.Paused ? RuntimeState.Paused : RuntimeState.Connected,
@@ -119,6 +175,7 @@ public sealed class RuntimeController : IDisposable
         }
         catch (Exception ex)
         {
+            try { watcher?.Dispose(); } catch { }
             try { kb?.Dispose(); } catch { }
             TransitionTo(RuntimeState.Error, ex.Message);
             Log($"open failed: {ex.Message}");
@@ -201,56 +258,6 @@ public sealed class RuntimeController : IDisposable
     {
         var all = KeyboardClient.FindAll(_settings.VendorId, _settings.ProductId);
         return all.Count == 0 ? null : all[0];
-    }
-
-    private void InstallPipelineLocked()
-    {
-        var engine = new RuleEngine
-        {
-            ForegroundProfile = _settings.ForegroundProfile,
-            BackgroundProfile = _settings.BackgroundProfile,
-        };
-        foreach (var app in _settings.WatchedApps) engine.WatchedExes.Add(app);
-
-        var switcher = new DebouncedSwitcher(_kb!, _settings.SwitchDelayMs)
-        {
-            Gate = () => !NeoSwitch.Core.ModifierKeys.AnyHeld(),
-            GateTimeoutMs = _settings.GateTimeoutMs,
-        };
-
-        switcher.Sent += target =>
-        {
-            lock (_lock)
-            {
-                CurrentProfileIdx = target;
-                LastSentProfile = target;
-                LastSentAt = DateTime.Now;
-            }
-            Log($"SENT profile {target}");
-            RaiseStateChanged();
-        };
-        switcher.Failed += (target, ex) =>
-        {
-            Log($"SEND FAIL -> {target}: {ex.Message}");
-            TransitionTo(RuntimeState.Error, ex.Message);
-        };
-
-        engine.Decided += dec =>
-        {
-            lock (_lock) { LastForegroundExe = dec.App.Executable; }
-            RaiseStateChanged();
-            if (!dec.ProfileChanged) return;
-            if (_settings.Paused) { Log($"(paused)  fg={dec.App.Executable} -> would be {dec.TargetProfile}"); return; }
-            switcher.Schedule(dec.TargetProfile);
-        };
-
-        var watcher = new ForegroundWatcher();
-        watcher.Changed += engine.OnForegroundChanged;
-        watcher.Start();
-
-        _engine = engine;
-        _switcher = switcher;
-        _watcher = watcher;
     }
 
     private void TransitionTo(RuntimeState s, string? detail)
