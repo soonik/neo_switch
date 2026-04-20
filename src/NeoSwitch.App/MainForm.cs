@@ -57,10 +57,10 @@ public sealed class MainForm : Form
         _ui      = ui;
 
         Text = "NeoSwitch";
-        Width = 820;
-        Height = 520;
-        MinimumSize = new Size(640, 420);
+        ClientSize = new Size(1000, 600);
+        MinimumSize = new Size(780, 480);
         StartPosition = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.Sizable;
         ShowInTaskbar = true;
 
         BuildLayout();
@@ -80,13 +80,21 @@ public sealed class MainForm : Form
             RowCount = 3,
             Padding = new Padding(0),
         };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64f));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
 
-        root.Controls.Add(BuildHeader(), 0, 0);
-        root.Controls.Add(BuildBody(),   0, 1);
-        root.Controls.Add(BuildFooter(), 0, 2);
+        var header = BuildHeader();
+        var body   = BuildBody();
+        var footer = BuildFooter();
+        header.Dock = DockStyle.Fill;
+        body.Dock   = DockStyle.Fill;
+        footer.Dock = DockStyle.Fill;
+
+        root.Controls.Add(header, 0, 0);
+        root.Controls.Add(body,   0, 1);
+        root.Controls.Add(footer, 0, 2);
         Controls.Add(root);
     }
 
@@ -133,12 +141,29 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 440,
             FixedPanel = FixedPanel.Panel2,
+            Panel2MinSize = 360,
+            Panel1MinSize = 280,
+        };
+        // SplitterDistance depends on the SplitContainer's actual width, which
+        // isn't known in the ctor. Set it on Load when sizes are final.
+        this.Load += (_, _) =>
+        {
+            int w = split.Width;
+            int target = Math.Max(split.Panel1MinSize, w - 400);
+            if (target > split.Panel1MinSize && target < w - split.Panel2MinSize)
+                split.SplitterDistance = target;
         };
 
         // ---- left: watched apps ----
-        var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(12) };
+        var left = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(12),
+        };
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -154,7 +179,16 @@ public sealed class MainForm : Form
         split.Panel1.Controls.Add(left);
 
         // ---- right: profile mapping ----
-        var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true, Padding = new Padding(12) };
+        // AutoScroll lets narrow windows show a scrollbar instead of clipping.
+        var right = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            AutoSize = false,
+            AutoScroll = true,
+            Padding = new Padding(12),
+        };
+        right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         right.Controls.Add(new Label
         {
             Text = "PROFILE MAPPING", AutoSize = true, Font = new Font("Segoe UI Semibold", 8.5f),
@@ -200,7 +234,7 @@ public sealed class MainForm : Form
 
     private Control BuildFooter()
     {
-        var p = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = SystemColors.Control };
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = SystemColors.Control };
         _statusFooter.Dock = DockStyle.Fill;
         _statusFooter.Padding = new Padding(12, 0, 12, 0);
         p.Controls.Add(_statusFooter);
