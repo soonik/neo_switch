@@ -17,12 +17,24 @@ public sealed class KeyboardClient : IDisposable
     private readonly int _writeReportIdOffset;
     private readonly object _lock = new();
 
+    /// <summary>Optional wire-level tracer; receives hex-formatted "TX"/"RX" lines.</summary>
+    public Action<string>? Logger { get; set; }
+
+    /// <summary>Per-round-trip read timeout (default 1500 ms).</summary>
+    public int ReadTimeoutMs
+    {
+        get => _stream.ReadTimeout;
+        set => _stream.ReadTimeout = value;
+    }
+
     public HidDevice Device => _device;
     public string ProductName => SafeGet(() => _device.GetProductName()) ?? "(unknown)";
     public string Manufacturer => SafeGet(() => _device.GetManufacturer()) ?? "(unknown)";
     public int VendorId => _device.VendorID;
     public int ProductId => _device.ProductID;
     public string DevicePath => _device.DevicePath;
+    public int MaxOutputReportLength => _outLen;
+    public int MaxInputReportLength => _inLen;
 
     private KeyboardClient(HidDevice device, HidStream stream)
     {
@@ -66,22 +78,31 @@ public sealed class KeyboardClient : IDisposable
 
     private static bool HasRawHidInterface(HidDevice device)
     {
+        foreach (uint usage in GetUsages(device))
+            if (usage == Protocol.RawHidUsage) return true;
+        return false;
+    }
+
+    /// <summary>All HID devices on the system (unfiltered). For diagnostics.</summary>
+    public static IReadOnlyList<HidDevice> AllHidDevices()
+        => DeviceList.Local.GetHidDevices().ToArray();
+
+    /// <summary>Return every top-level application usage (page &lt;&lt; 16 | id) declared by the device, safely.</summary>
+    public static IReadOnlyList<uint> GetUsages(HidDevice device)
+    {
+        var result = new List<uint>();
         try
         {
             var rd = device.GetReportDescriptor();
             foreach (var di in rd.DeviceItems)
-            {
                 foreach (uint usage in di.Usages.GetAllValues())
-                {
-                    if (usage == Protocol.RawHidUsage) return true;
-                }
-            }
+                    result.Add(usage);
         }
         catch
         {
-            // Some collections (boot keyboard etc.) refuse descriptor queries — ignore.
+            // Some collections refuse descriptor queries — return what we have.
         }
-        return false;
+        return result;
     }
 
     // --------------- High-level API ---------------
@@ -134,42 +155,129 @@ public sealed class KeyboardClient : IDisposable
     // --------------- Transport ---------------
 
     /// <summary>
-    /// Serialises a write + read round-trip. Retries the read up to 8 times to
-    /// skip unsolicited reports until one echoes our request header.
+    /// Write an arbitrary command (e.g. VIA <c>0x01</c> protocol version) and
+    /// read the first reply whose first <paramref name="matchLen"/> bytes echo
+    /// <paramref name="command"/>. Returns the report payload with the HID
+    /// report-ID byte stripped.
     /// </summary>
-    private byte[] SendAndReceive(ReadOnlySpan<byte> command)
+    public byte[] SendAndReceive(ReadOnlySpan<byte> command, int matchLen = 2)
     {
         lock (_lock)
         {
+            // ----- build outgoing report -----
             var outBuf = new byte[_outLen];
             command.CopyTo(outBuf.AsSpan(_writeReportIdOffset));
-            _stream.Write(outBuf);
+            Trace("TX", outBuf);
 
+            try
+            {
+                _stream.Write(outBuf);
+            }
+            catch (Exception ex) when (ex is TimeoutException or IOException)
+            {
+                throw new IOException(
+                    $"HID write failed after {ReadTimeoutMs} ms sending {Hex(command)}. " +
+                    "Is the keyboard still connected? Is the web configurator (he.qwertykeys.com) open?",
+                    ex);
+            }
+
+            // ----- read replies, skipping non-matching reports -----
             var inBuf = new byte[Math.Max(_inLen, Protocol.ReportDataSize + 1)];
             for (int attempt = 0; attempt < 8; attempt++)
             {
-                int n = _stream.Read(inBuf);
+                int n;
+                try
+                {
+                    n = _stream.Read(inBuf);
+                }
+                catch (TimeoutException)
+                {
+                    throw new TimeoutException(
+                        $"HID read timed out after {ReadTimeoutMs} ms waiting for a reply to {Hex(command)}. " +
+                        $"Device: {DevicePath}. " +
+                        "Possible causes: firmware does not implement this command, wrong HID interface, " +
+                        "or another app holds the handle. Try 'neoswitch probe' to diagnose.");
+                }
+
                 if (n <= 0) continue;
                 int payloadOffset = n > Protocol.ReportDataSize ? 1 : 0;
-                if (EchoesCommand(inBuf, payloadOffset, command))
+                var rxView = new ReadOnlySpan<byte>(inBuf, 0, n);
+                Trace("RX", rxView);
+
+                if (EchoesCommand(inBuf, payloadOffset, command, matchLen))
                 {
                     var result = new byte[n - payloadOffset];
                     Array.Copy(inBuf, payloadOffset, result, 0, result.Length);
                     return result;
                 }
             }
-            throw new IOException("No matching HID reply received after 8 reads.");
+            throw new IOException(
+                $"No reply matching {Hex(command)} received after 8 reads (unsolicited reports only).");
         }
     }
 
-    private static bool EchoesCommand(byte[] reply, int offset, ReadOnlySpan<byte> cmd)
+    private static bool EchoesCommand(byte[] reply, int offset, ReadOnlySpan<byte> cmd, int matchLen)
     {
-        // Match on the first 2 header bytes: [base, subOp].
-        int check = Math.Min(2, cmd.Length);
+        int check = Math.Min(matchLen, cmd.Length);
         if (reply.Length - offset < check) return false;
         for (int i = 0; i < check; i++)
             if (reply[offset + i] != cmd[i]) return false;
         return true;
+    }
+
+    /// <summary>Read one raw HID input report (including report-ID prefix on Windows). Used for probing.</summary>
+    public byte[] ReadRaw()
+    {
+        lock (_lock)
+        {
+            var buf = new byte[Math.Max(_inLen, Protocol.ReportDataSize + 1)];
+            int n = _stream.Read(buf);
+            var result = new byte[n];
+            Array.Copy(buf, result, n);
+            Trace("RX", result);
+            return result;
+        }
+    }
+
+    /// <summary>Send a raw command (without the report-ID byte); returns matching reply payload.</summary>
+    public byte[] SendRaw(ReadOnlySpan<byte> command, int matchLen = 2)
+        => SendAndReceive(command, matchLen);
+
+    private void Trace(string tag, ReadOnlySpan<byte> bytes)
+    {
+        if (Logger is null) return;
+        Logger($"{tag} {Hex(bytes)}");
+    }
+
+    public static string Hex(ReadOnlySpan<byte> bytes)
+    {
+        var sb = new StringBuilder(bytes.Length * 3);
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            sb.Append(bytes[i].ToString("X2"));
+        }
+        return sb.ToString();
+    }
+
+    public static byte[] ParseHex(string s)
+    {
+        var cleaned = new StringBuilder(s.Length);
+        foreach (char c in s)
+        {
+            if (char.IsWhiteSpace(c) || c == ',' || c == ':') continue;
+            if (c == '0' && cleaned.Length < s.Length - 1 &&
+                (s[cleaned.Length + 1] == 'x' || s[cleaned.Length + 1] == 'X')) continue;
+            if (c == 'x' || c == 'X') continue;
+            cleaned.Append(c);
+        }
+        string clean = cleaned.ToString();
+        if (clean.Length % 2 != 0)
+            throw new FormatException($"hex string must have even length: '{s}'");
+        var result = new byte[clean.Length / 2];
+        for (int i = 0; i < result.Length; i++)
+            result[i] = Convert.ToByte(clean.Substring(i * 2, 2), 16);
+        return result;
     }
 
     private static T? SafeGet<T>(Func<T> fn) where T : class
