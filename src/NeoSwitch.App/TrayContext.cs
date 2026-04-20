@@ -10,6 +10,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly RuntimeController _runtime;
     private readonly MainForm _form;
     private readonly NotifyIcon _tray;
+    private readonly SynchronizationContext _ui;
 
     private readonly ToolStripMenuItem _miOpen;
     private readonly ToolStripMenuItem _miPause;
@@ -18,9 +19,14 @@ public sealed class TrayContext : ApplicationContext
 
     public TrayContext()
     {
+        // Captured on the UI thread — posts back to the WinForms message pump.
+        _ui = SynchronizationContext.Current
+              ?? throw new InvalidOperationException(
+                  "TrayContext must be constructed on the WinForms UI thread.");
+
         _store   = new SettingsStore();
         _runtime = new RuntimeController(_store.Current);
-        _form    = new MainForm(_runtime, _store);
+        _form    = new MainForm(_runtime, _store, _ui);
 
         _miOpen      = new ToolStripMenuItem("Open NeoSwitch");
         _miPause     = new ToolStripMenuItem("Pause switching") { CheckOnClick = true };
@@ -66,7 +72,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnStateChanged()
     {
-        void Apply()
+        _ui.Post(_ =>
         {
             _miPause.Checked = _store.Current.Paused;
 
@@ -83,15 +89,7 @@ public sealed class TrayContext : ApplicationContext
             string tooltip = $"NeoSwitch — {product}  ·  {state}{(profile.Length > 0 ? "  ·  " + profile : "")}";
             if (tooltip.Length > 63) tooltip = tooltip[..63];  // NotifyIcon.Text hard limit
             _tray.Text = tooltip;
-        }
-
-        // Marshal to UI thread via the hidden form handle.
-        try
-        {
-            if (_form.IsHandleCreated) _form.BeginInvoke(Apply);
-            else Apply();
-        }
-        catch { }
+        }, null);
     }
 
     protected override void ExitThreadCore()
