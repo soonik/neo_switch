@@ -47,9 +47,11 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_miExit);
 
+        Icon appIcon = LoadAppIcon();
+        _form.Icon = appIcon;
         _tray = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = appIcon,
             Text = "NeoSwitch",
             Visible = true,
             ContextMenuStrip = menu,
@@ -96,6 +98,34 @@ public sealed class TrayContext : ApplicationContext
             if (tooltip.Length > 63) tooltip = tooltip[..63];  // NotifyIcon.Text hard limit
             _tray.Text = tooltip;
         }, null);
+    }
+
+    /// <summary>
+    /// Load the tray/window icon. Tries (1) the embedded resource
+    /// Assets/NeoSwitch.ico, (2) the icon associated with the running exe,
+    /// and (3) <see cref="SystemIcons.Application"/> as a last-resort fallback
+    /// so a missing asset never crashes startup.
+    /// </summary>
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            var asm = typeof(TrayContext).Assembly;
+            using var s = asm.GetManifestResourceStream("NeoSwitch.App.Assets.NeoSwitch.ico");
+            if (s != null) return new Icon(s);
+        }
+        catch { }
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                var icon = Icon.ExtractAssociatedIcon(exe);
+                if (icon != null) return icon;
+            }
+        }
+        catch { }
+        return SystemIcons.Application;
     }
 
     protected override void ExitThreadCore()

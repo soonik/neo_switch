@@ -9,12 +9,19 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>NeoSwitch</AssemblyName>
     <RootNamespace>NeoSwitch.App</RootNamespace>
-    <ApplicationIcon />
+    <ApplicationIcon>Assets\NeoSwitch.ico</ApplicationIcon>
     <UseWPF>false</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NeoSwitch.Core\NeoSwitch.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed the .ico so we can load it at runtime without a loose file. -->
+    <EmbeddedResource Include="Assets\NeoSwitch.ico">
+      <LogicalName>NeoSwitch.App.Assets.NeoSwitch.ico</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
