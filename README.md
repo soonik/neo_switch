@@ -11,8 +11,8 @@ Windows, built on the HID protocol reverse-engineered from
 | M0 | UI mockup + plan | ✅ done — `mockup/neo-switch.html`, `PLAN.md` |
 | M1 | `KeyboardClient` + CLI prototype | ✅ done — `neoswitch list/info/get/switch/probe/raw` |
 | M2 | Foreground watcher + rule engine | ✅ done — `neoswitch watch` + DebouncedSwitcher + modifier gate |
-| **M3** | **WinForms tray UI** | **🚧 in progress** — `NeoSwitch.App` |
-| M4 | Hot-plug + start-with-Windows | |
+| M3 | WinForms tray UI | ✅ done — `NeoSwitch.App` (tray + main window) |
+| **M4** | **Hot-plug + start-with-Windows + device picker** | **🚧 in progress** |
 | M5 | Packaged installer | |
 
 ## Repo layout
@@ -144,6 +144,24 @@ persisted to `%APPDATA%\NeoSwitch\config.json`.
 - **Close (×)** hides the window to the tray; the pipeline keeps running.
 - **Tray right-click** → Open / Pause switching / Reconnect keyboard /
   Exit (the only way to fully quit).
+
+### M4 additions
+
+- **Device picker (ComboBox in the header)** — lists every raw-HID
+  keyboard currently visible. Selecting one persists
+  `VendorId`/`ProductId` to `config.json` and auto-reconnects. Solves
+  the "wrong keyboard auto-picked" problem from M1/M2.
+- **Hot-plug auto-reconnect** — `RuntimeController` subscribes to
+  `DeviceList.Local.Changed`. If the preferred device is unplugged,
+  state transitions to `Disconnected`; when it comes back (or a
+  transient HID write failure indicates the same), the controller
+  reconnects automatically after a 300 ms settle delay.
+- **Start with Windows** — toggled via a checkbox in the right pane.
+  Writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\NeoSwitch`
+  (no admin rights required). The UI reflects the actual registry
+  state on load, not just whatever is cached in the config.
+- **Settings schema versioning** — `config.json` now carries a
+  `SchemaVersion` field (currently `1`) for future migrations.
 
 Published single-file exe once M3 is stable:
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using HidSharp;
 using NeoSwitch.Core;
 
 namespace NeoSwitch.App;
@@ -12,10 +13,19 @@ public sealed class MainForm : Form
 
     // Header
     private readonly Label _statusDot = new() { AutoSize = true, Font = new Font("Segoe UI", 14f), Text = "●" };
-    private readonly Label _kbName  = new() { AutoSize = true, Font = new Font("Segoe UI Semibold", 10f), Text = "(no keyboard)" };
+    private readonly ComboBox _cbDevice = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300 };
     private readonly Label _kbInfo  = new() { AutoSize = true, ForeColor = SystemColors.GrayText, Text = "" };
     private readonly Label _kbProfile = new() { AutoSize = true, Text = "" };
     private readonly Button _btnReconnect = new() { Text = "Reconnect", AutoSize = true };
+
+    // Device-picker state
+    private bool _cbDeviceSuppressEvent;
+    private readonly List<DeviceChoice> _deviceChoices = new();
+
+    private sealed record DeviceChoice(int? VendorId, int? ProductId, string Display)
+    {
+        public override string ToString() => Display;
+    }
 
     // Watched apps
     private readonly ListBox _listApps = new() { IntegralHeight = false, SelectionMode = SelectionMode.MultiExtended };
@@ -29,6 +39,7 @@ public sealed class MainForm : Form
     private readonly Label _fgPreview = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
     private readonly Label _bgPreview = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
     private readonly CheckBox _cbPause = new() { Text = "Pause switching", AutoSize = true };
+    private readonly CheckBox _cbStartup = new() { Text = "Start with Windows", AutoSize = true };
     private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 80 };
     private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 80 };
 
@@ -85,7 +96,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Top,
             ColumnCount = 5,
-            Height = 56,
+            Height = 64,
             Padding = new Padding(12, 10, 12, 10),
             BackColor = SystemColors.ControlLight,
         };
@@ -95,18 +106,23 @@ public sealed class MainForm : Form
         p.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         p.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var namePanel = new TableLayoutPanel { ColumnCount = 1, RowCount = 2, AutoSize = true, Margin = new Padding(8, 0, 0, 0) };
-        namePanel.Controls.Add(_kbName, 0, 0);
-        namePanel.Controls.Add(_kbInfo, 0, 1);
+        var namePanel = new TableLayoutPanel
+        {
+            ColumnCount = 1, RowCount = 2, AutoSize = true,
+            Margin = new Padding(8, 0, 0, 0),
+        };
+        _cbDevice.Margin = new Padding(0, 0, 0, 2);
+        namePanel.Controls.Add(_cbDevice, 0, 0);
+        namePanel.Controls.Add(_kbInfo,   0, 1);
 
         _statusDot.ForeColor = Color.Gray;
-        _statusDot.Margin = new Padding(0, 2, 0, 0);
+        _statusDot.Margin = new Padding(0, 4, 0, 0);
 
         p.Controls.Add(_statusDot,  0, 0);
         p.Controls.Add(namePanel,   1, 0);
         p.Controls.Add(_kbProfile,  2, 0);
         _kbProfile.Anchor = AnchorStyles.Right;
-        _kbProfile.Margin = new Padding(0, 8, 12, 0);
+        _kbProfile.Margin = new Padding(0, 10, 12, 0);
         p.Controls.Add(_btnReconnect, 3, 0);
         return p;
     }
@@ -149,6 +165,8 @@ public sealed class MainForm : Form
         right.Controls.Add(MakeFieldRow("Switch delay (ms)", _nudSwitchDelay, null, "debounce between foreground change and HID write"));
         right.Controls.Add(MakeFieldRow("Gate timeout (ms)", _nudGateTimeout, null, "max wait for modifier keys to release"));
         right.Controls.Add(_cbPause);
+        _cbStartup.Margin = new Padding(0, 6, 0, 0);
+        right.Controls.Add(_cbStartup);
         split.Panel2.Controls.Add(right);
 
         return split;
@@ -244,6 +262,34 @@ public sealed class MainForm : Form
             _store.Save();
         };
 
+        _cbDevice.SelectedIndexChanged += (_, _) =>
+        {
+            if (_cbDeviceSuppressEvent) return;
+            int i = _cbDevice.SelectedIndex;
+            if (i < 0 || i >= _deviceChoices.Count) return;
+            var choice = _deviceChoices[i];
+            if (S.VendorId == choice.VendorId && S.ProductId == choice.ProductId) return;
+            S.VendorId  = choice.VendorId;
+            S.ProductId = choice.ProductId;
+            _store.Save();
+            _runtime.Reconnect();
+        };
+
+        _cbStartup.CheckedChanged += (_, _) =>
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            bool desired = _cbStartup.Checked;
+            bool ok = StartupRegistrar.SetEnabled(desired);
+            S.StartWithWindows = ok && desired;
+            _store.Save();
+            if (!ok)
+            {
+                _cbDeviceSuppressEvent = true;
+                _cbStartup.Checked = StartupRegistrar.IsEnabled();
+                _cbDeviceSuppressEvent = false;
+            }
+        };
+
         _runtime.StateChanged += () =>
         {
             if (IsDisposed) return;
@@ -253,6 +299,11 @@ public sealed class MainForm : Form
         {
             if (IsDisposed) return;
             _ui.Post(_ => { if (!IsDisposed) AppendLog(line); }, null);
+        };
+        _runtime.DevicesChanged += () =>
+        {
+            if (IsDisposed) return;
+            _ui.Post(_ => { if (!IsDisposed) RefreshDeviceList(); }, null);
         };
     }
 
@@ -270,7 +321,66 @@ public sealed class MainForm : Form
         _nudSwitchDelay.Value = Math.Clamp(S.SwitchDelayMs, (int)_nudSwitchDelay.Minimum, (int)_nudSwitchDelay.Maximum);
         _nudGateTimeout.Value = Math.Clamp(S.GateTimeoutMs, (int)_nudGateTimeout.Minimum, (int)_nudGateTimeout.Maximum);
         _cbPause.Checked = S.Paused;
+
+        if (OperatingSystem.IsWindows())
+        {
+            _cbDeviceSuppressEvent = true;
+            bool actual = StartupRegistrar.IsEnabled();
+            _cbStartup.Checked = actual;
+            if (actual != S.StartWithWindows) { S.StartWithWindows = actual; _store.Save(); }
+            _cbDeviceSuppressEvent = false;
+        }
+        else
+        {
+            _cbStartup.Enabled = false;
+        }
+
         ReloadAppsListBox();
+        RefreshDeviceList();
+    }
+
+    private void RefreshDeviceList()
+    {
+        var devices = RuntimeController.EnumerateDevices();
+
+        _cbDeviceSuppressEvent = true;
+        _cbDevice.BeginUpdate();
+        _cbDevice.Items.Clear();
+        _deviceChoices.Clear();
+
+        if (devices.Count == 0)
+        {
+            _deviceChoices.Add(new DeviceChoice(null, null, "(no keyboard detected)"));
+        }
+        else
+        {
+            foreach (var d in devices)
+            {
+                string name = SafeGet(() => d.GetProductName()) ?? "(unknown)";
+                _deviceChoices.Add(new DeviceChoice(
+                    d.VendorID, d.ProductID,
+                    $"{name}  (vid=0x{d.VendorID:X4} pid=0x{d.ProductID:X4})"));
+            }
+        }
+        foreach (var c in _deviceChoices) _cbDevice.Items.Add(c);
+
+        int select = 0;
+        if (S.VendorId is int v && S.ProductId is int p)
+        {
+            for (int i = 0; i < _deviceChoices.Count; i++)
+            {
+                var c = _deviceChoices[i];
+                if (c.VendorId == v && c.ProductId == p) { select = i; break; }
+            }
+        }
+        _cbDevice.SelectedIndex = _deviceChoices.Count == 0 ? -1 : select;
+        _cbDevice.EndUpdate();
+        _cbDeviceSuppressEvent = false;
+    }
+
+    private static T? SafeGet<T>(Func<T> fn) where T : class
+    {
+        try { return fn(); } catch { return null; }
     }
 
     private void ReloadAppsListBox()
@@ -322,16 +432,9 @@ public sealed class MainForm : Form
                 break;
         }
 
-        if (_runtime.ConnectedProduct != null)
-        {
-            _kbName.Text = _runtime.ConnectedProduct;
-            _kbInfo.Text = $"vid=0x{_runtime.ConnectedVid:X4}  pid=0x{_runtime.ConnectedPid:X4}";
-        }
-        else
-        {
-            _kbName.Text = "(no keyboard)";
-            _kbInfo.Text = _runtime.StateDetail ?? "";
-        }
+        _kbInfo.Text = _runtime.ConnectedProduct != null
+            ? $"vid=0x{_runtime.ConnectedVid:X4}  pid=0x{_runtime.ConnectedPid:X4}"
+            : _runtime.StateDetail ?? "";
 
         string profileLabel = _runtime.CurrentProfileIdx is byte idx
             ? $"Active: profile {idx}  {ProfileNameFor(_runtime.Profiles, idx)}"

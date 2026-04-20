@@ -6,6 +6,9 @@ namespace NeoSwitch.App;
 /// </summary>
 public sealed class Settings
 {
+    /// <summary>Schema version for future migrations. Bump when fields change incompatibly.</summary>
+    public int SchemaVersion { get; set; } = 1;
+
     /// <summary>Lowercase .exe basenames, e.g. "valorant.exe".</summary>
     public List<string> WatchedApps { get; set; } = new();
 
@@ -29,4 +32,7 @@ public sealed class Settings
 
     /// <summary>If true, the runtime observes foreground changes but issues no HID writes.</summary>
     public bool Paused { get; set; }
+
+    /// <summary>Mirrors the HKCU\...\Run registry key; synced by StartupRegistrar on save.</summary>
+    public bool StartWithWindows { get; set; }
 }

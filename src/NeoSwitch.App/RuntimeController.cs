@@ -1,3 +1,4 @@
+using HidSharp;
 using NeoSwitch.Core;
 
 namespace NeoSwitch.App;
@@ -49,10 +50,17 @@ public sealed class RuntimeController : IDisposable
     // ----- events -----
     public event Action? StateChanged;
     public event Action<string>? LogLine;
+    /// <summary>Raised whenever HidSharp reports a device-list change.</summary>
+    public event Action? DevicesChanged;
+
+    private readonly EventHandler _hidChangedHandler;
+    private int _reconnectScheduled;  // 0 = idle, 1 = queued; interlocked
 
     public RuntimeController(Settings settings)
     {
         _settings = settings;
+        _hidChangedHandler = (_, _) => OnHidDevicesChanged();
+        DeviceList.Local.Changed += _hidChangedHandler;
     }
 
     /// <summary>
@@ -129,7 +137,17 @@ public sealed class RuntimeController : IDisposable
             switcher.Failed += (target, ex) =>
             {
                 Log($"SEND FAIL -> {target}: {ex.Message}");
-                TransitionTo(RuntimeState.Error, ex.Message);
+                // Most likely the device was unplugged. Tear down and let the
+                // DeviceList.Changed handler or a manual Reconnect recover.
+                if (IsLikelyDisconnect(ex))
+                {
+                    TransitionTo(RuntimeState.Disconnected, "device disconnected");
+                    RunControl(StopCore);
+                }
+                else
+                {
+                    TransitionTo(RuntimeState.Error, ex.Message);
+                }
             };
 
             engine.Decided += dec =>
@@ -245,6 +263,7 @@ public sealed class RuntimeController : IDisposable
 
     public void Dispose()
     {
+        try { DeviceList.Local.Changed -= _hidChangedHandler; } catch { }
         lock (_lock) { _disposed = true; }
         // Wait for any in-flight Start/Stop to settle, then tear down synchronously.
         try { _controlSem.Wait(TimeSpan.FromSeconds(3)); } catch { }
@@ -252,9 +271,47 @@ public sealed class RuntimeController : IDisposable
         _controlSem.Dispose();
     }
 
+    /// <summary>
+    /// Fired by HidSharp when any HID device arrives or leaves. Triggers a
+    /// UI refresh and, if we're disconnected but a matching device is now
+    /// available, schedules an auto-reconnect.
+    /// </summary>
+    private void OnHidDevicesChanged()
+    {
+        try { DevicesChanged?.Invoke(); } catch { }
+
+        bool connected;
+        lock (_lock) { connected = _kb != null; }
+        if (connected) return;
+
+        // Coalesce bursts (a reconnect can fire several Changed events).
+        if (Interlocked.CompareExchange(ref _reconnectScheduled, 1, 0) != 0) return;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(300);  // give USB enumeration a beat
+                if (_disposed) return;
+                var match = KeyboardClient.FindAll(_settings.VendorId, _settings.ProductId);
+                if (match.Count == 0) return;
+                Log("device available — auto-reconnecting");
+                RunControl(StartCore);
+            }
+            finally { Interlocked.Exchange(ref _reconnectScheduled, 0); }
+        });
+    }
+
+    private static bool IsLikelyDisconnect(Exception ex) =>
+        ex is IOException || ex is ObjectDisposedException || ex is TimeoutException;
+
     // ----- helpers -----
 
-    private HidSharp.HidDevice? PickDevice()
+    /// <summary>Snapshot of raw-HID devices currently visible. For UI picker.</summary>
+    public static IReadOnlyList<HidDevice> EnumerateDevices() =>
+        KeyboardClient.FindAll();
+
+    private HidDevice? PickDevice()
     {
         var all = KeyboardClient.FindAll(_settings.VendorId, _settings.ProductId);
         return all.Count == 0 ? null : all[0];
