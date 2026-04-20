@@ -10,8 +10,8 @@ Windows, built on the HID protocol reverse-engineered from
 |---|---|---|
 | M0 | UI mockup + plan | ✅ done — `mockup/neo-switch.html`, `PLAN.md` |
 | M1 | `KeyboardClient` + CLI prototype | ✅ done — `neoswitch list/info/get/switch/probe/raw` |
-| **M2** | **Foreground watcher + rule engine** | **🚧 in progress** — `neoswitch watch` |
-| M3 | WinForms tray UI | |
+| M2 | Foreground watcher + rule engine | ✅ done — `neoswitch watch` + DebouncedSwitcher + modifier gate |
+| **M3** | **WinForms tray UI** | **🚧 in progress** — `NeoSwitch.App` |
 | M4 | Hot-plug + start-with-Windows | |
 | M5 | Packaged installer | |
 
@@ -26,8 +26,17 @@ src/
     ProfileInfo.cs         data types
     ForegroundWatcher.cs   SetWinEventHook-backed foreground tracker (Win)
     RuleEngine.cs          watchedExes → target profile decision
+    DebouncedSwitcher.cs   coalesces HID writes; modifier-gate before commit
+    ModifierKeys.cs        GetAsyncKeyState wrapper (Alt/Ctrl/Shift/Win)
   NeoSwitch.Cli/           console prototype
     Program.cs             list | info | get | switch | probe | raw | watch
+  NeoSwitch.App/           WinForms tray app (M3)
+    Program.cs             STAThread entry; runs TrayContext
+    TrayContext.cs         NotifyIcon host + application lifetime
+    MainForm.cs            main window (watched apps + profile mapping)
+    RuntimeController.cs   pipeline wiring exposed as observable state
+    SettingsStore.cs       %APPDATA%\NeoSwitch\config.json
+    Settings.cs            persisted user configuration
 mockup/neo-switch.html     interactive UI mockup for the tray app
 switch-profile.html        one-file WebHID reproducer (browser-only)
 SPEC.md                    protocol spec
@@ -113,6 +122,36 @@ fg profile = 1   bg profile = 0   switch delay = 200ms
 actually committed `--switch-delay` ms later. `*` = foreground exe is in
 the watched set. If the user alt-tabs through several apps faster than
 the debounce window, only the final target is committed. Ctrl+C to stop.
+
+## Tray app (M3)
+
+Same pipeline as `neoswitch watch`, wrapped in a WinForms tray app.
+
+```powershell
+dotnet run --project src/NeoSwitch.App
+```
+
+On launch, `NeoSwitch.exe` connects the first raw-HID keyboard it finds
+(configurable via `VendorId`/`ProductId` in the config file), installs
+the foreground hook, and minimises to the system tray. Configuration is
+persisted to `%APPDATA%\NeoSwitch\config.json`.
+
+- **Double-click** the tray icon → open the main window.
+- **Main window**: left pane lists watched apps (Add from file…, Add
+  running process…, Remove); right pane has `Foreground profile` /
+  `Background profile` steppers, `Switch delay` / `Gate timeout`, and a
+  `Pause switching` checkbox.
+- **Close (×)** hides the window to the tray; the pipeline keeps running.
+- **Tray right-click** → Open / Pause switching / Reconnect keyboard /
+  Exit (the only way to fully quit).
+
+Published single-file exe once M3 is stable:
+
+```powershell
+dotnet publish src/NeoSwitch.App -c Release -r win-x64 `
+  --self-contained true -p:PublishSingleFile=true -o publish/
+publish/NeoSwitch.exe
+```
 
 Published single-file exe (once built):
 
