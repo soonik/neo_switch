@@ -142,17 +142,28 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
             FixedPanel = FixedPanel.Panel2,
-            Panel2MinSize = 360,
-            Panel1MinSize = 280,
+            // Panel{1,2}MinSize intentionally NOT set in the initializer:
+            // SplitContainer's default Width is ~150, and settings that violate
+            // Panel1MinSize + Panel2MinSize + SplitterWidth <= Width put the
+            // control into a state where every later SplitterDistance=N
+            // assignment throws. Configure after first layout, under try/catch.
         };
-        // SplitterDistance depends on the SplitContainer's actual width, which
-        // isn't known in the ctor. Set it on Load when sizes are final.
-        this.Load += (_, _) =>
+
+        this.Shown += (_, _) =>
         {
-            int w = split.Width;
-            int target = Math.Max(split.Panel1MinSize, w - 400);
-            if (target > split.Panel1MinSize && target < w - split.Panel2MinSize)
+            try
+            {
+                int w = split.Width;
+                int sw = split.SplitterWidth;
+                const int p1Min = 280;
+                const int p2Min = 360;
+                if (w < p1Min + p2Min + sw) return;  // too narrow for custom sizing
+                split.Panel1MinSize = p1Min;
+                split.Panel2MinSize = p2Min;
+                int target = Math.Clamp(w - 420, p1Min, w - p2Min - sw);
                 split.SplitterDistance = target;
+            }
+            catch { /* fall back to defaults — better than crashing */ }
         };
 
         // ---- left: watched apps ----
