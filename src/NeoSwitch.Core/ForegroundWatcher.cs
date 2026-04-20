@@ -14,6 +14,17 @@ public readonly record struct ForegroundApp(
     IntPtr Hwnd);
 
 /// <summary>
+/// A foreground-window transition that <see cref="ForegroundWatcher"/> filtered
+/// out (shell tray, alt-tab overlay, cloaked UWP, invisible helper windows…).
+/// </summary>
+public readonly record struct SkippedEvent(
+    IntPtr Hwnd,
+    string WindowClass,
+    string Executable,
+    int ProcessId,
+    string Reason);
+
+/// <summary>
 /// Event-driven foreground-window watcher backed by
 /// <c>SetWinEventHook(EVENT_SYSTEM_FOREGROUND)</c>. Windows-only.
 ///
@@ -32,6 +43,33 @@ public sealed class ForegroundWatcher : IDisposable
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     public event Action<ForegroundApp>? Changed;
+
+    /// <summary>
+    /// Raised for foreground events that were filtered out (transient shell
+    /// windows, cloaked UWP surfaces, etc.). Subscribe for diagnostics.
+    /// </summary>
+    public event Action<SkippedEvent>? Skipped;
+
+    /// <summary>
+    /// Window class names that are never treated as user-foreground. Taskbar,
+    /// tray, alt-tab overlay, Start / quick-settings flyouts, and friends.
+    /// Add your own entries if you see spurious switches in <c>--log-filtered</c>.
+    /// </summary>
+    public HashSet<string> IgnoredWindowClasses { get; } = new(StringComparer.Ordinal)
+    {
+        "Shell_TrayWnd",
+        "Shell_SecondaryTrayWnd",
+        "NotifyIconOverflowWindow",
+        "TaskSwitcherWnd",
+        "TaskSwitcherOverlayWnd",
+        "MultitaskingViewFrame",
+        "XamlExplorerHostIslandWindow",
+        "TopLevelWindowForOverflowXamlIsland",
+        "Shell_InputSwitchTopLevelWindow",
+        "DV2ControlHost",
+        "Windows.Internal.Shell.TabProxyWindow",
+        "Windows.UI.Core.CoreComponentInputSource",
+    };
 
     private Thread? _thread;
     private uint _threadId;
@@ -127,12 +165,56 @@ public sealed class ForegroundWatcher : IDisposable
 
     private void EmitFor(IntPtr hwnd)
     {
+        if (!IsUserForeground(hwnd, out string? skipReason, out string className))
+        {
+            var skip = Skipped;
+            if (skip != null)
+            {
+                TryGetExe(hwnd, out int spid, out string spath);
+                string sexe = string.IsNullOrEmpty(spath) ? "(unknown)" : Path.GetFileName(spath).ToLowerInvariant();
+                try { skip(new SkippedEvent(hwnd, className, sexe, spid, skipReason ?? "")); }
+                catch { /* swallow */ }
+            }
+            return;
+        }
+
         if (!TryGetExe(hwnd, out int pid, out string fullPath)) return;
         string exe = Path.GetFileName(fullPath).ToLowerInvariant();
         var handler = Changed;
         if (handler == null) return;
         try { handler(new ForegroundApp(pid, exe, fullPath, hwnd)); }
         catch { /* never let a subscriber kill the pump */ }
+    }
+
+    private bool IsUserForeground(IntPtr hwnd, out string? reason, out string className)
+    {
+        className = "";
+        if (hwnd == IntPtr.Zero) { reason = "null hwnd"; return false; }
+
+        if (!IsWindowVisible(hwnd)) { reason = "not visible"; return false; }
+
+        // DWM cloaking: suspended UWP tabs, offscreen shell surfaces.
+        int cloaked = 0;
+        if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, ref cloaked, sizeof(int)) == 0 && cloaked != 0)
+        {
+            reason = "cloaked";
+            return false;
+        }
+
+        var sb = new StringBuilder(128);
+        int n = GetClassName(hwnd, sb, sb.Capacity);
+        className = n > 0 ? sb.ToString(0, n) : "";
+
+        if (className.Length == 0) { reason = "empty class"; return false; }
+
+        if (IgnoredWindowClasses.Contains(className))
+        {
+            reason = $"shell class '{className}'";
+            return false;
+        }
+
+        reason = null;
+        return true;
     }
 
     private static bool TryGetExe(IntPtr hwnd, out int pid, out string fullPath)
@@ -178,6 +260,14 @@ public sealed class ForegroundWatcher : IDisposable
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    private const int DWMWA_CLOAKED = 14;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MSG
