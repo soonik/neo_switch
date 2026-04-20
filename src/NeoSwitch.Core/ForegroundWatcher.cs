@@ -38,7 +38,6 @@ public sealed class ForegroundWatcher : IDisposable
 {
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
-    private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const uint WM_QUIT = 0x0012;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
@@ -126,10 +125,13 @@ public sealed class ForegroundWatcher : IDisposable
     {
         _threadId = GetCurrentThreadId();
         _cb = OnWinEvent;
+        // NOT using WINEVENT_SKIPOWNPROCESS: the host application's own windows
+        // (e.g. the NeoSwitch main form) are legitimate "not-watched" foregrounds
+        // that should flip the keyboard to the background profile.
         _hook = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero, _cb, 0, 0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+            WINEVENT_OUTOFCONTEXT);
 
         // Seed subscribers with the current foreground window before returning.
         try { EmitFor(GetForegroundWindow()); } catch { /* swallow */ }
