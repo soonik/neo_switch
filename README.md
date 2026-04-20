@@ -12,8 +12,8 @@ Windows, built on the HID protocol reverse-engineered from
 | M1 | `KeyboardClient` + CLI prototype | ✅ done — `neoswitch list/info/get/switch/probe/raw` |
 | M2 | Foreground watcher + rule engine | ✅ done — `neoswitch watch` + DebouncedSwitcher + modifier gate |
 | M3 | WinForms tray UI | ✅ done — `NeoSwitch.App` (tray + main window) |
-| **M4** | **Hot-plug + start-with-Windows + device picker** | **🚧 in progress** |
-| M5 | Packaged installer | |
+| M4 | Hot-plug + start-with-Windows + device picker | ✅ done |
+| **M5** | **Single-file publish + GH release workflow** | **✅ done — `publish.ps1`, `.github/workflows/release.yml`** |
 
 ## Repo layout
 
@@ -43,7 +43,19 @@ SPEC.md                    protocol spec
 PLAN.md                    architecture + milestones
 ```
 
-## Build
+## Install (end users)
+
+Each tagged release attaches a single-file, self-contained Windows build
+to the [GitHub Releases](https://github.com/soonik/neo_switch/releases)
+page. No .NET runtime install required.
+
+- `NeoSwitch-win-x64.zip` — the tray app. Unzip anywhere, run
+  `NeoSwitch.exe`. Tick **Start with Windows** from the main window if
+  you want it auto-launching on logon.
+- `neoswitch-cli-win-x64.zip` — the CLI (`neoswitch.exe`). Drop on
+  `PATH` for `neoswitch watch / info / switch …` from any terminal.
+
+## Build (developers)
 
 Requires **.NET 8 SDK** on Windows.
 
@@ -51,6 +63,31 @@ Requires **.NET 8 SDK** on Windows.
 dotnet restore
 dotnet build -c Release
 ```
+
+### Produce the single-file release artifacts locally
+
+```powershell
+pwsh ./publish.ps1
+# outputs:
+#   publish/app/NeoSwitch.exe         (tray app)
+#   publish/cli/neoswitch.exe         (CLI)
+#   publish/NeoSwitch-win-x64.zip
+#   publish/neoswitch-cli-win-x64.zip
+```
+
+Pass `-Rid win-arm64` for ARM64. The flags set by `publish.ps1`
+(`--self-contained true`, `PublishSingleFile=true`,
+`IncludeNativeLibrariesForSelfExtract=true`,
+`EnableCompressionInSingleFile=true`) mirror what CI produces.
+
+### CI
+
+Pushing a tag matching `v*` triggers
+`.github/workflows/release.yml` on `windows-latest`. The workflow
+publishes both projects, uploads them as workflow artifacts, and (for
+tag pushes) attaches the zips to a GitHub Release with auto-generated
+notes. Manual invocation via *Actions → release → Run workflow* works
+too.
 
 ## CLI usage (M1)
 
