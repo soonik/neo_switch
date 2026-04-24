@@ -61,6 +61,7 @@ public sealed class MainForm : Form
     private readonly Label _bgPreview = new() { AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Body };
     private readonly ToggleSwitch _tsPause = new();
     private readonly ToggleSwitch _tsStartup = new();
+    private readonly ToggleSwitch _tsGateAnyKey = new();
     private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 90 };
     private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 90 };
 
@@ -302,7 +303,10 @@ public sealed class MainForm : Form
         right.Controls.Add(MakeFieldRow("Foreground profile", _nudFg, _fgPreview, "when a watched app is focused"));
         right.Controls.Add(MakeFieldRow("Background profile", _nudBg, _bgPreview, "when nothing watched is focused"));
         right.Controls.Add(MakeFieldRow("Switch delay (ms)",  _nudSwitchDelay, null, "debounce before the HID write"));
-        right.Controls.Add(MakeFieldRow("Gate timeout (ms)",  _nudGateTimeout, null, "max wait for modifier keys to release"));
+        right.Controls.Add(MakeFieldRow("Gate timeout (ms)",  _nudGateTimeout, null, "max wait for keys to release before writing anyway"));
+        right.Controls.Add(MakeToggleRow(_tsGateAnyKey, "Wait for all keys to release",
+            "on: wait for any key (letters, arrows, F-keys) before switching — safest\n" +
+            "off: only wait for modifier keys (Alt/Ctrl/Shift/Win) — lower latency"));
         right.Controls.Add(MakeToggleRow(_tsPause,   "Pause switching", "observe foreground changes but send no HID"));
         right.Controls.Add(MakeToggleRow(_tsStartup, "Start with Windows", "auto-launch NeoSwitch on logon"));
         split.Panel2.Controls.Add(right);
@@ -455,6 +459,15 @@ public sealed class MainForm : Form
             _store.Save();
         };
 
+        _tsGateAnyKey.CheckedChanged += (_, _) =>
+        {
+            if (S.GateOnAnyKey == _tsGateAnyKey.Checked) return;
+            S.GateOnAnyKey = _tsGateAnyKey.Checked;
+            _store.Save();
+            // No need to restart the runtime — the gate predicate reads the
+            // setting directly on each poll.
+        };
+
         _cbDevice.SelectedIndexChanged += (_, _) =>
         {
             if (_cbDeviceSuppressEvent) return;
@@ -515,6 +528,7 @@ public sealed class MainForm : Form
         _nudSwitchDelay.Value = Math.Clamp(S.SwitchDelayMs, (int)_nudSwitchDelay.Minimum, (int)_nudSwitchDelay.Maximum);
         _nudGateTimeout.Value = Math.Clamp(S.GateTimeoutMs, (int)_nudGateTimeout.Minimum, (int)_nudGateTimeout.Maximum);
         _tsPause.Checked = S.Paused;
+        _tsGateAnyKey.Checked = S.GateOnAnyKey;
 
         if (OperatingSystem.IsWindows())
         {

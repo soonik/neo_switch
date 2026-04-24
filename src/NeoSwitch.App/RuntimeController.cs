@@ -119,7 +119,9 @@ public sealed class RuntimeController : IDisposable
 
             var switcher = new DebouncedSwitcher(kb, _settings.SwitchDelayMs)
             {
-                Gate = () => !NeoSwitch.Core.ModifierKeys.AnyHeld(),
+                Gate = () => _settings.GateOnAnyKey
+                    ? !NeoSwitch.Core.KeyboardState.AnyKeyHeld()
+                    : !NeoSwitch.Core.ModifierKeys.AnyHeld(),
                 GateTimeoutMs = _settings.GateTimeoutMs,
             };
 
