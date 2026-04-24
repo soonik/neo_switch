@@ -30,6 +30,14 @@ public sealed class Settings
     /// <summary>How long to wait for modifier keys to release before writing (ms).</summary>
     public int GateTimeoutMs { get; set; } = 1000;
 
+    /// <summary>
+    /// When true, the HID write is gated on <b>any</b> physical key being held
+    /// down (not just modifiers). Catches stuck alpha/function/arrow keys on
+    /// top of stuck Alt/Ctrl/Shift/Win. When false, only modifiers gate the
+    /// write — lower worst-case switch latency, slightly higher stuck-key risk.
+    /// </summary>
+    public bool GateOnAnyKey { get; set; } = true;
+
     /// <summary>If true, the runtime observes foreground changes but issues no HID writes.</summary>
     public bool Paused { get; set; }
 

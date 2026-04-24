@@ -229,7 +229,9 @@ internal static class Program
         using var switcher = new DebouncedSwitcher(kb, cfg.SwitchDelayMs)
         {
             Gate = OperatingSystem.IsWindows() && !cfg.NoModifierGate
-                ? () => !ModifierKeys.AnyHeld()
+                ? (cfg.GateAnyKey
+                    ? () => !KeyboardState.AnyKeyHeld()
+                    : () => !ModifierKeys.AnyHeld())
                 : null,
             GateTimeoutMs = cfg.GateTimeoutMs,
         };
@@ -244,8 +246,8 @@ internal static class Program
         switcher.Waiting += ms =>
         {
             if (!OperatingSystem.IsWindows()) return;
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss.fff}]   WAIT  modifiers held ({ModifierKeys.HeldString()})");
+            string held = cfg.GateAnyKey ? KeyboardState.HeldDescription() : ModifierKeys.HeldString();
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   WAIT  keys held ({held})");
         };
         switcher.Sent += target =>
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]   SENT profile {target}");
@@ -271,7 +273,7 @@ internal static class Program
         Console.WriteLine(
             $"fg profile = {cfg.FgProfile}   bg profile = {cfg.BgProfile}   " +
             $"switch delay = {cfg.SwitchDelayMs}ms   " +
-            $"modifier gate = {(cfg.NoModifierGate ? "off" : $"on ({cfg.GateTimeoutMs}ms timeout)")}" +
+            $"key gate = {(cfg.NoModifierGate ? "off" : $"{(cfg.GateAnyKey ? "any-key" : "modifiers-only")} ({cfg.GateTimeoutMs}ms timeout)")}" +
             $"{(cfg.DryRun ? "   [DRY RUN — no HID writes]" : "")}");
         Console.WriteLine("(Ctrl+C to stop)");
         Console.WriteLine();
@@ -288,7 +290,7 @@ internal static class Program
     sealed record WatchArgs(
         List<string> Apps, byte FgProfile, byte BgProfile,
         bool DryRun, int SwitchDelayMs, bool LogFiltered,
-        bool NoModifierGate, int GateTimeoutMs);
+        bool NoModifierGate, int GateTimeoutMs, bool GateAnyKey);
 
     static WatchArgs ParseWatchArgs(string[] args)
     {
@@ -299,6 +301,7 @@ internal static class Program
         bool logFiltered = false;
         bool noGate = false;
         int gateTimeout = 1000;
+        bool gateAnyKey = true;   // gate on any held key by default; safer for typing
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
@@ -328,6 +331,12 @@ internal static class Program
                 case "--no-modifier-gate":
                     noGate = true;
                     break;
+                case "--gate-modifiers-only":
+                    gateAnyKey = false;
+                    break;
+                case "--gate-any-key":
+                    gateAnyKey = true;
+                    break;
                 case "--dry-run":
                     dry = true;
                     break;
@@ -338,7 +347,7 @@ internal static class Program
                     throw new FormatException($"watch: unknown option '{a}'");
             }
         }
-        return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered, noGate, gateTimeout);
+        return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered, noGate, gateTimeout, gateAnyKey);
     }
 
     static int CmdRaw(Options opts, string[] rest)
@@ -495,7 +504,8 @@ internal static class Program
               raw <hex bytes>         send arbitrary command, print reply  (e.g. 'raw D0 B0')
               watch --app <exe>...    foreground-driven profile switch
                                       (--fg/--bg/--switch-delay/--gate-timeout/
-                                       --no-modifier-gate/--dry-run/--log-filtered)
+                                       --no-modifier-gate/--gate-any-key/--gate-modifiers-only/
+                                       --dry-run/--log-filtered)
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)
