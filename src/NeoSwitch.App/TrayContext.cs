@@ -15,6 +15,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _miOpen;
     private readonly ToolStripMenuItem _miPause;
     private readonly ToolStripMenuItem _miReconnect;
+    private readonly ToolStripMenuItem _miReleaseStuck;
     private readonly ToolStripMenuItem _miExit;
 
     public TrayContext()
@@ -34,16 +35,18 @@ public sealed class TrayContext : ApplicationContext
         _runtime = new RuntimeController(_store.Current);
         _form    = new MainForm(_runtime, _store, _ui);
 
-        _miOpen      = new ToolStripMenuItem("Open NeoSwitch");
-        _miPause     = new ToolStripMenuItem("Pause switching") { CheckOnClick = true };
-        _miReconnect = new ToolStripMenuItem("Reconnect keyboard");
-        _miExit      = new ToolStripMenuItem("Exit");
+        _miOpen         = new ToolStripMenuItem("Open NeoSwitch");
+        _miPause        = new ToolStripMenuItem("Pause switching") { CheckOnClick = true };
+        _miReconnect    = new ToolStripMenuItem("Reconnect keyboard");
+        _miReleaseStuck = new ToolStripMenuItem("Release stuck keys");
+        _miExit         = new ToolStripMenuItem("Exit");
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_miOpen);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_miPause);
         menu.Items.Add(_miReconnect);
+        menu.Items.Add(_miReleaseStuck);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_miExit);
 
@@ -64,8 +67,9 @@ public sealed class TrayContext : ApplicationContext
             _runtime.TogglePause();
             _store.Save();
         };
-        _miReconnect.Click += (_, _) => _runtime.Reconnect();
-        _miExit.Click      += (_, _) => ExitThread();
+        _miReconnect.Click    += (_, _) => _runtime.Reconnect();
+        _miReleaseStuck.Click += (_, _) => _runtime.ReleaseStuckKeysNow();
+        _miExit.Click         += (_, _) => ExitThread();
 
         _tray.DoubleClick += (_, _) => _form.ShowAndActivate();
 

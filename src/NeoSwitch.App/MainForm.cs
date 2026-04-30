@@ -62,6 +62,8 @@ public sealed class MainForm : Form
     private readonly ToggleSwitch _tsPause = new();
     private readonly ToggleSwitch _tsStartup = new();
     private readonly ToggleSwitch _tsGateAnyKey = new();
+    private readonly ToggleSwitch _tsAutoRelease = new();
+    private readonly NumericUpDown _nudAutoReleaseDelay = new() { Minimum = 0, Maximum = 2000, Increment = 25, Width = 90 };
     private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 90 };
     private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 90 };
 
@@ -102,6 +104,7 @@ public sealed class MainForm : Form
         StyleNumericUpDown(_nudBg);
         StyleNumericUpDown(_nudSwitchDelay);
         StyleNumericUpDown(_nudGateTimeout);
+        StyleNumericUpDown(_nudAutoReleaseDelay);
 
         BuildLayout();
         WireEvents();
@@ -307,6 +310,11 @@ public sealed class MainForm : Form
         right.Controls.Add(MakeToggleRow(_tsGateAnyKey, "Wait for all keys to release",
             "on: wait for any key (letters, arrows, F-keys) before switching — safest\n" +
             "off: only wait for modifier keys (Alt/Ctrl/Shift/Win) — lower latency"));
+        right.Controls.Add(MakeToggleRow(_tsAutoRelease, "Auto-release stuck keys after switch",
+            "force a key-up for any key still held immediately after the switch.\n" +
+            "Recovers from firmware-dropped key-ups; brief flicker if you're really still holding the key."));
+        right.Controls.Add(MakeFieldRow("Auto-release delay (ms)", _nudAutoReleaseDelay, null,
+            "how long to wait after the HID write before sweeping for stuck keys"));
         right.Controls.Add(MakeToggleRow(_tsPause,   "Pause switching", "observe foreground changes but send no HID"));
         right.Controls.Add(MakeToggleRow(_tsStartup, "Start with Windows", "auto-launch NeoSwitch on logon"));
         split.Panel2.Controls.Add(right);
@@ -468,6 +476,19 @@ public sealed class MainForm : Form
             // setting directly on each poll.
         };
 
+        _tsAutoRelease.CheckedChanged += (_, _) =>
+        {
+            if (S.AutoReleaseAfterSwitch == _tsAutoRelease.Checked) return;
+            S.AutoReleaseAfterSwitch = _tsAutoRelease.Checked;
+            _store.Save();
+        };
+
+        _nudAutoReleaseDelay.ValueChanged += (_, _) =>
+        {
+            S.AutoReleaseDelayMs = (int)_nudAutoReleaseDelay.Value;
+            _store.Save();
+        };
+
         _cbDevice.SelectedIndexChanged += (_, _) =>
         {
             if (_cbDeviceSuppressEvent) return;
@@ -527,8 +548,10 @@ public sealed class MainForm : Form
         _nudBg.Value = Math.Min(_nudBg.Maximum, S.BackgroundProfile);
         _nudSwitchDelay.Value = Math.Clamp(S.SwitchDelayMs, (int)_nudSwitchDelay.Minimum, (int)_nudSwitchDelay.Maximum);
         _nudGateTimeout.Value = Math.Clamp(S.GateTimeoutMs, (int)_nudGateTimeout.Minimum, (int)_nudGateTimeout.Maximum);
+        _nudAutoReleaseDelay.Value = Math.Clamp(S.AutoReleaseDelayMs, (int)_nudAutoReleaseDelay.Minimum, (int)_nudAutoReleaseDelay.Maximum);
         _tsPause.Checked = S.Paused;
         _tsGateAnyKey.Checked = S.GateOnAnyKey;
+        _tsAutoRelease.Checked = S.AutoReleaseAfterSwitch;
 
         if (OperatingSystem.IsWindows())
         {

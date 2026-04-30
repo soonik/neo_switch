@@ -41,6 +41,23 @@ public sealed class DebouncedSwitcher : IDisposable
     /// <summary>Gate polling interval in ms. Default 20 ms.</summary>
     public int GatePollMs { get; set; } = 20;
 
+    /// <summary>
+    /// Optional snapshot taken right before the HID write fires. The result
+    /// (if non-null) is forwarded to <see cref="PostWrite"/> after a successful
+    /// send, so callers can recover from key-state damage caused by the
+    /// firmware's matrix reset.
+    /// </summary>
+    public Func<object?>? CaptureBeforeWrite { get; set; }
+
+    /// <summary>
+    /// Optional post-write callback. Receives the value returned by
+    /// <see cref="CaptureBeforeWrite"/>. Invoked on the timer thread, after
+    /// the HID write succeeds and after <see cref="Sent"/> fires. Callers
+    /// MAY perform their own delays inside; the switcher does no extra
+    /// waiting.
+    /// </summary>
+    public Action<object?>? PostWrite { get; set; }
+
     /// <summary>Raised on the timer thread after the HID write succeeds.</summary>
     public event Action<byte>? Sent;
 
@@ -110,10 +127,15 @@ public sealed class DebouncedSwitcher : IDisposable
             _pendingTarget = null;
         }
 
+        // Capture pre-write state (e.g. held keys) so PostWrite can act on it.
+        object? snapshot = null;
+        try { snapshot = CaptureBeforeWrite?.Invoke(); } catch { }
+
         try
         {
             _kb.SwitchProfile(target);
             Sent?.Invoke(target);
+            try { PostWrite?.Invoke(snapshot); } catch { }
         }
         catch (Exception ex)
         {
