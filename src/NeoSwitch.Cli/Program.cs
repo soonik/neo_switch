@@ -33,14 +33,15 @@ internal static class Program
 
         return cmd switch
         {
-            "list"   => CmdList(opts, rest),
-            "info"   => CmdInfo(opts),
-            "get"    => CmdGet(opts),
-            "switch" => CmdSwitch(opts, rest),
-            "probe"  => CmdProbe(opts),
-            "raw"    => CmdRaw(opts, rest),
-            "watch"  => CmdWatch(opts, rest),
-            _        => Fail($"unknown command '{cmd}' — run with --help for usage.")
+            "list"    => CmdList(opts, rest),
+            "info"    => CmdInfo(opts),
+            "get"     => CmdGet(opts),
+            "switch"  => CmdSwitch(opts, rest),
+            "probe"   => CmdProbe(opts),
+            "raw"     => CmdRaw(opts, rest),
+            "watch"   => CmdWatch(opts, rest),
+            "release" => CmdRelease(),
+            _         => Fail($"unknown command '{cmd}' — run with --help for usage.")
         };
     }
 
@@ -350,6 +351,15 @@ internal static class Program
         return new WatchArgs(apps, fg, bg, dry, delayMs, logFiltered, noGate, gateTimeout, gateAnyKey);
     }
 
+    static int CmdRelease()
+    {
+        if (!OperatingSystem.IsWindows())
+            return Fail("'release' is Windows-only.");
+        int n = NeoSwitch.Core.Win32Input.ReleaseAllHeld();
+        Console.WriteLine($"released {n} stuck key(s)");
+        return 0;
+    }
+
     static int CmdRaw(Options opts, string[] rest)
     {
         if (rest.Length == 0)
@@ -506,6 +516,8 @@ internal static class Program
                                       (--fg/--bg/--switch-delay/--gate-timeout/
                                        --no-modifier-gate/--gate-any-key/--gate-modifiers-only/
                                        --dry-run/--log-filtered)
+              release                 force a key-up for every "watched" VK still
+                                      reported as held — manual stuck-key recovery
 
             global options:
               --vid <hex>             restrict to this USB vendor ID    (e.g. 0x1ea7)

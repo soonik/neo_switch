@@ -123,6 +123,24 @@ public sealed class RuntimeController : IDisposable
                     ? !NeoSwitch.Core.KeyboardState.AnyKeyHeld()
                     : !NeoSwitch.Core.ModifierKeys.AnyHeld(),
                 GateTimeoutMs = _settings.GateTimeoutMs,
+                // Snapshot which keys were held right before the HID write
+                // so PostWrite can decide which to recover.
+                CaptureBeforeWrite = () => NeoSwitch.Core.KeyboardState.GetHeldVks(),
+                PostWrite = ctx =>
+                {
+                    if (!_settings.AutoReleaseAfterSwitch) return;
+                    if (ctx is not List<int> preHeld || preHeld.Count == 0) return;
+                    int delayMs = Math.Max(0, _settings.AutoReleaseDelayMs);
+                    Task.Run(async () =>
+                    {
+                        if (delayMs > 0) await Task.Delay(delayMs);
+                        // Only release keys that were held before AND are still
+                        // held now — releases nothing we didn't already see, and
+                        // skips anything the user has actually let go of.
+                        int released = NeoSwitch.Core.Win32Input.ReleaseHeldKeys(preHeld);
+                        if (released > 0) Log($"auto-released {released} key(s) post-switch");
+                    });
+                },
             };
 
             switcher.Sent += target =>
@@ -261,6 +279,19 @@ public sealed class RuntimeController : IDisposable
         lock (_lock) { CurrentProfileIdx = idx; }
         RaiseStateChanged();
         Log($"force-switch -> profile {idx}");
+    }
+
+    /// <summary>
+    /// User-initiated "panic button": forge a <c>KEYUP</c> for every watched
+    /// VK the OS thinks is still held. Returns how many key-ups were sent.
+    /// Safe to call any time; does not require a connected keyboard.
+    /// </summary>
+    public int ReleaseStuckKeysNow()
+    {
+        if (!OperatingSystem.IsWindows()) return 0;
+        int released = NeoSwitch.Core.Win32Input.ReleaseAllHeld();
+        Log($"manual release: {released} key(s)");
+        return released;
     }
 
     public void Dispose()

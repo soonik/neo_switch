@@ -29,6 +29,21 @@ public static class KeyboardState
         return false;
     }
 
+    /// <summary>Return every "watched" VK currently held down.</summary>
+    public static List<int> GetHeldVks()
+    {
+        var result = new List<int>();
+        for (int vk = 0x08; vk <= 0xFE; vk++)
+        {
+            if (!IsWatched(vk)) continue;
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0) result.Add(vk);
+        }
+        return result;
+    }
+
+    /// <summary>Is the given VK currently held? Does not validate it's "watched".</summary>
+    public static bool IsHeld(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
     /// <summary>Short human-readable description of held keys — for logs and UI.</summary>
     public static string HeldDescription()
     {

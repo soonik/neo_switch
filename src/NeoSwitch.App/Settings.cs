@@ -38,6 +38,18 @@ public sealed class Settings
     /// </summary>
     public bool GateOnAnyKey { get; set; } = true;
 
+    /// <summary>
+    /// After a successful HID write, synthesise a <c>KEYUP</c> for every
+    /// "watched" VK that was held immediately before the write and is still
+    /// held after <see cref="AutoReleaseDelayMs"/>. Recovers from the
+    /// firmware-loses-key-up bug at the cost of a brief flicker if the user
+    /// is genuinely still pressing the key.
+    /// </summary>
+    public bool AutoReleaseAfterSwitch { get; set; } = false;
+
+    /// <summary>How long to wait after the HID write before sweeping for stuck keys (ms).</summary>
+    public int AutoReleaseDelayMs { get; set; } = 100;
+
     /// <summary>If true, the runtime observes foreground changes but issues no HID writes.</summary>
     public bool Paused { get; set; }
 
