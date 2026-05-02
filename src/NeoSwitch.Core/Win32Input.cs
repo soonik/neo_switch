@@ -44,9 +44,18 @@ public static class Win32Input
 
     private static INPUT MakeKeyUp(int vk)
     {
+        // MAPVK_VK_TO_VSC_EX returns a 4-byte value where the low byte is the
+        // base scan code and a non-zero high byte (e.g. 0xE0) marks the key
+        // as "extended". Using this is more robust than maintaining a hand-
+        // rolled list of extended VKs — it picks up the correct flag for
+        // numpad / arrow / RCtrl / RAlt / etc. automatically.
+        uint scanEx = MapVirtualKey((uint)vk, MAPVK_VK_TO_VSC_EX);
+        ushort scan = (ushort)(scanEx & 0xFF);
+        bool isExtended = ((scanEx >> 8) & 0xFF) != 0;
+
         uint flags = KEYEVENTF_KEYUP;
-        if (IsExtendedKey(vk)) flags |= KEYEVENTF_EXTENDEDKEY;
-        ushort scan = (ushort)MapVirtualKey((uint)vk, MAPVK_VK_TO_VSC);
+        if (isExtended) flags |= KEYEVENTF_EXTENDEDKEY;
+
         return new INPUT
         {
             Type = INPUT_KEYBOARD,
@@ -64,18 +73,6 @@ public static class Win32Input
         };
     }
 
-    private static bool IsExtendedKey(int vk) => vk switch
-    {
-        // Navigation cluster + arrow keys
-        0x21 or 0x22 or 0x23 or 0x24 or 0x25 or 0x26 or 0x27 or 0x28 => true,
-        0x2D or 0x2E => true,          // Insert / Delete
-        0x5B or 0x5C or 0x5D => true,  // L-Win / R-Win / Apps
-        0x90 => true,                  // NumLock
-        0x6F => true,                  // Numpad /
-        0xA3 or 0xA5 => true,          // R-Ctrl / R-Alt
-        _ => false,
-    };
-
     // -------- P/Invoke --------
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -88,6 +85,7 @@ public static class Win32Input
     private const uint KEYEVENTF_KEYUP       = 0x0002;
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint MAPVK_VK_TO_VSC       = 0;
+    private const uint MAPVK_VK_TO_VSC_EX    = 4;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT

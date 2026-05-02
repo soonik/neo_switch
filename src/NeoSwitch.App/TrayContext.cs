@@ -18,6 +18,9 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _miReleaseStuck;
     private readonly ToolStripMenuItem _miExit;
 
+    private readonly HotkeyHost? _hotkeys;
+    private int? _panicHotkeyId;
+
     public TrayContext()
     {
         // WinForms installs its SynchronizationContext lazily during
@@ -80,6 +83,40 @@ public sealed class TrayContext : ApplicationContext
 
         // Update menu / tooltip to reflect initial state.
         OnStateChanged();
+
+        // Global panic hotkey, registered via the standard non-hooking
+        // RegisterHotKey path (anti-cheat–safe, fires WM_HOTKEY only when
+        // the chord is pressed).
+        if (OperatingSystem.IsWindows())
+        {
+            _hotkeys = new HotkeyHost();
+            ApplyPanicHotkey();
+            _form.PanicHotkeyChanged += () => _ui.Post(_ => ApplyPanicHotkey(), null);
+        }
+    }
+
+    private void ApplyPanicHotkey()
+    {
+        if (_hotkeys == null) return;
+        if (_panicHotkeyId is int id) { _hotkeys.Unregister(id); _panicHotkeyId = null; }
+
+        var s = _store.Current;
+        if (!s.PanicHotkeyEnabled || s.PanicHotkeyVk == 0) return;
+
+        try
+        {
+            _panicHotkeyId = _hotkeys.Register(
+                (HotkeyMods)s.PanicHotkeyModifiers,
+                s.PanicHotkeyVk,
+                () => _runtime.ReleaseStuckKeysNow());
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Most common cause: another app already owns this chord. Surface
+            // a tooltip-style notification so the user can pick another binding.
+            _tray.ShowBalloonTip(4000, "NeoSwitch — panic hotkey not registered",
+                ex.Message, ToolTipIcon.Warning);
+        }
     }
 
     private void OnStateChanged()
@@ -134,6 +171,7 @@ public sealed class TrayContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        try { _hotkeys?.Dispose(); } catch { }
         try { _runtime.Dispose(); } catch { }
         try { _store.Save(); } catch { }
         try { _tray.Visible = false; _tray.Dispose(); } catch { }

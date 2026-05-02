@@ -64,6 +64,12 @@ public sealed class MainForm : Form
     private readonly ToggleSwitch _tsGateAnyKey = new();
     private readonly ToggleSwitch _tsAutoRelease = new();
     private readonly NumericUpDown _nudAutoReleaseDelay = new() { Minimum = 0, Maximum = 2000, Increment = 25, Width = 90 };
+    private readonly ToggleSwitch _tsPanicHotkey = new();
+    private readonly Label _lblPanicHotkey = new() { AutoSize = true };
+    private readonly Button _btnChangePanicHotkey = new() { Text = "Change…" };
+
+    /// <summary>Raised when the panic-hotkey settings change so the host can re-register.</summary>
+    public event Action? PanicHotkeyChanged;
     private readonly NumericUpDown _nudSwitchDelay = new() { Minimum = 0, Maximum = 5000, Increment = 50, Width = 90 };
     private readonly NumericUpDown _nudGateTimeout = new() { Minimum = 0, Maximum = 10000, Increment = 100, Width = 90 };
 
@@ -100,6 +106,7 @@ public sealed class MainForm : Form
         ButtonStyler.Flat(_btnAddFile, primary: true);
         ButtonStyler.Flat(_btnAddRunning);
         ButtonStyler.Flat(_btnRemove);
+        ButtonStyler.Flat(_btnChangePanicHotkey);
         StyleNumericUpDown(_nudFg);
         StyleNumericUpDown(_nudBg);
         StyleNumericUpDown(_nudSwitchDelay);
@@ -315,11 +322,53 @@ public sealed class MainForm : Form
             "Recovers from firmware-dropped key-ups; brief flicker if you're really still holding the key."));
         right.Controls.Add(MakeFieldRow("Auto-release delay (ms)", _nudAutoReleaseDelay, null,
             "how long to wait after the HID write before sweeping for stuck keys"));
+        right.Controls.Add(MakeToggleRow(_tsPanicHotkey, "Panic hotkey",
+            "global chord that releases all stuck keys, regardless of focus"));
+        right.Controls.Add(MakePanicHotkeyRow());
         right.Controls.Add(MakeToggleRow(_tsPause,   "Pause switching", "observe foreground changes but send no HID"));
         right.Controls.Add(MakeToggleRow(_tsStartup, "Start with Windows", "auto-launch NeoSwitch on logon"));
         split.Panel2.Controls.Add(right);
 
         return split;
+    }
+
+    private Control MakePanicHotkeyRow()
+    {
+        var row = new TableLayoutPanel
+        {
+            ColumnCount = 3, AutoSize = true, Margin = new Padding(0, 0, 0, 14),
+            BackColor = Color.Transparent,
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var lbl = new Label
+        {
+            Text = "Hotkey chord", AutoSize = true,
+            Margin = new Padding(0, 6, 6, 0),
+            ForeColor = Theme.Text, Font = Theme.Body,
+        };
+        row.Controls.Add(lbl, 0, 0);
+
+        _lblPanicHotkey.ForeColor = Theme.Accent;
+        _lblPanicHotkey.Font      = new Font("Segoe UI Semibold", 10f);
+        _lblPanicHotkey.Margin    = new Padding(0, 5, 12, 0);
+        row.Controls.Add(_lblPanicHotkey, 1, 0);
+
+        _btnChangePanicHotkey.Anchor = AnchorStyles.None;
+        row.Controls.Add(_btnChangePanicHotkey, 2, 0);
+
+        var hintLbl = new Label
+        {
+            Text = "Click Change… and press the chord you want.",
+            AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Body,
+            Margin = new Padding(0, 2, 0, 0),
+        };
+        row.SetColumnSpan(hintLbl, 3);
+        row.RowCount = 2;
+        row.Controls.Add(hintLbl, 0, 1);
+        return row;
     }
 
     private Control MakeFieldRow(string label, Control input, Control? preview, string hint)
@@ -489,6 +538,33 @@ public sealed class MainForm : Form
             _store.Save();
         };
 
+        _tsPanicHotkey.CheckedChanged += (_, _) =>
+        {
+            if (S.PanicHotkeyEnabled == _tsPanicHotkey.Checked) return;
+            S.PanicHotkeyEnabled = _tsPanicHotkey.Checked;
+            _store.Save();
+            PanicHotkeyChanged?.Invoke();
+        };
+
+        _btnChangePanicHotkey.Click += (_, _) =>
+        {
+            using var dlg = new HotkeyCaptureDialog((HotkeyMods)S.PanicHotkeyModifiers, S.PanicHotkeyVk);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            // Reject empty bindings — would be impossible to fire.
+            if (dlg.CapturedVk == 0)
+            {
+                MessageBox.Show(this,
+                    "Hotkey is empty. Choose a key combination first.",
+                    "NeoSwitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            S.PanicHotkeyModifiers = (uint)dlg.CapturedMods;
+            S.PanicHotkeyVk        = dlg.CapturedVk;
+            _store.Save();
+            _lblPanicHotkey.Text = HotkeyCaptureDialog.FormatChord(dlg.CapturedMods, dlg.CapturedVk);
+            PanicHotkeyChanged?.Invoke();
+        };
+
         _cbDevice.SelectedIndexChanged += (_, _) =>
         {
             if (_cbDeviceSuppressEvent) return;
@@ -552,6 +628,8 @@ public sealed class MainForm : Form
         _tsPause.Checked = S.Paused;
         _tsGateAnyKey.Checked = S.GateOnAnyKey;
         _tsAutoRelease.Checked = S.AutoReleaseAfterSwitch;
+        _tsPanicHotkey.Checked = S.PanicHotkeyEnabled;
+        _lblPanicHotkey.Text   = HotkeyCaptureDialog.FormatChord((HotkeyMods)S.PanicHotkeyModifiers, S.PanicHotkeyVk);
 
         if (OperatingSystem.IsWindows())
         {
