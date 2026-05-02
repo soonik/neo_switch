@@ -50,6 +50,15 @@ public sealed class Settings
     /// <summary>How long to wait after the HID write before sweeping for stuck keys (ms).</summary>
     public int AutoReleaseDelayMs { get; set; } = 100;
 
+    /// <summary>If true, a global hotkey fires <c>Win32Input.ReleaseAllHeld()</c>.</summary>
+    public bool PanicHotkeyEnabled { get; set; } = true;
+
+    /// <summary>Win32 modifier flags (MOD_ALT/CTRL/SHIFT/WIN) for the panic hotkey.</summary>
+    public uint PanicHotkeyModifiers { get; set; } = 0x0007; // Ctrl + Alt + Shift
+
+    /// <summary>Virtual-key code for the panic hotkey (default 'R').</summary>
+    public uint PanicHotkeyVk { get; set; } = 0x52;          // R
+
     /// <summary>If true, the runtime observes foreground changes but issues no HID writes.</summary>
     public bool Paused { get; set; }
 
